@@ -15,6 +15,8 @@ interface AnalyticsBarProps {
     onExpiryChange: (expiry: string) => void;
     totalStrikes: number;
     loading: boolean;
+    instrumentName: string;
+    lotSize?: number;
 }
 
 function formatINR(n: number): string {
@@ -43,6 +45,8 @@ export function AnalyticsBar({
     onExpiryChange,
     totalStrikes,
     loading,
+    instrumentName,
+    lotSize,
 }: AnalyticsBarProps) {
     const maxPainDistance = underlyingLTP > 0
         ? ((maxPain - underlyingLTP) / underlyingLTP) * 100
@@ -73,8 +77,8 @@ export function AnalyticsBar({
                                 key={date}
                                 onClick={() => onExpiryChange(date)}
                                 className={`px-3 py-1.5 rounded-lg text-[11px] font-medium transition-all duration-200 whitespace-nowrap ${selectedExpiry === date
-                                        ? "text-white"
-                                        : "hover:bg-white/[0.04]"
+                                    ? "text-white"
+                                    : "hover:bg-white/[0.04]"
                                     }`}
                                 style={{
                                     background:
@@ -102,17 +106,22 @@ export function AnalyticsBar({
 
             {/* Analytics row */}
             <div className="px-6 py-2.5 flex items-center gap-6 overflow-x-auto">
-                {/* Spot price */}
+                {/* Underlying price — prominent display */}
                 <motion.div
                     initial={{ opacity: 0, y: 5 }}
                     animate={{ opacity: 1, y: 0 }}
-                    className="flex items-center gap-2"
+                    className="flex items-center gap-2.5"
                 >
-                    <TrendingUp size={13} style={{ color: "var(--muted-foreground)" }} />
-                    <span className="text-[10px] font-medium" style={{ color: "var(--muted-foreground)" }}>
-                        Spot
-                    </span>
-                    <span className="text-xs font-bold text-white">
+                    <TrendingUp size={14} style={{ color: "#6C5CE7" }} />
+                    <div className="flex items-center gap-1.5">
+                        <span className="text-xs font-bold text-white">
+                            {instrumentName}
+                        </span>
+                        <span className="text-[10px] font-medium" style={{ color: "var(--muted-foreground)" }}>
+                            Spot
+                        </span>
+                    </div>
+                    <span className="text-sm font-extrabold" style={{ color: "#a29bfe" }}>
                         {loading ? "—" : `₹${formatINR(underlyingLTP)}`}
                     </span>
                 </motion.div>
@@ -200,11 +209,31 @@ export function AnalyticsBar({
 
                 <div className="w-px h-5" style={{ background: "var(--border)" }} />
 
+                {/* Lot Size */}
+                {lotSize && lotSize > 0 && (
+                    <>
+                        <motion.div
+                            initial={{ opacity: 0, y: 5 }}
+                            animate={{ opacity: 1, y: 0 }}
+                            transition={{ delay: 0.2 }}
+                            className="flex items-center gap-2"
+                        >
+                            <span className="text-[10px] font-medium" style={{ color: "var(--muted-foreground)" }}>
+                                Lot
+                            </span>
+                            <span className="text-xs font-bold text-[#48DBFB]">
+                                {lotSize.toLocaleString("en-IN")}
+                            </span>
+                        </motion.div>
+                        <div className="w-px h-5" style={{ background: "var(--border)" }} />
+                    </>
+                )}
+
                 {/* Total Strikes */}
                 <motion.div
                     initial={{ opacity: 0, y: 5 }}
                     animate={{ opacity: 1, y: 0 }}
-                    transition={{ delay: 0.2 }}
+                    transition={{ delay: 0.25 }}
                     className="flex items-center gap-2"
                 >
                     <BarChart3 size={13} style={{ color: "var(--muted-foreground)" }} />

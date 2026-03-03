@@ -12,6 +12,10 @@ import {
   TrendingUp,
   Shield,
   ChevronRight,
+  Sparkles,
+  Globe,
+  LineChart,
+  Target,
 } from "lucide-react";
 
 /* ─── Animated Counter ─── */
@@ -37,51 +41,61 @@ function AnimatedCounter({ value, suffix = "" }: { value: number; suffix?: strin
   );
 }
 
-/* ─── Floating Orb Background ─── */
-function FloatingOrbs() {
+/* ─── Aurora Background ─── */
+function AuroraBackground() {
   return (
     <div className="absolute inset-0 overflow-hidden pointer-events-none">
-      {/* Primary orb */}
+      {/* Main aurora blob */}
+      <motion.div
+        className="absolute w-[900px] h-[900px] rounded-full animate-aurora"
+        style={{
+          background: "radial-gradient(circle, rgba(139,92,246,0.12) 0%, rgba(99,102,241,0.06) 40%, transparent 70%)",
+          top: "-15%",
+          right: "-15%",
+        }}
+      />
+      {/* Rose accent */}
       <motion.div
         className="absolute w-[600px] h-[600px] rounded-full"
         style={{
-          background: "radial-gradient(circle, rgba(108,92,231,0.15) 0%, transparent 70%)",
-          top: "10%",
-          right: "-10%",
+          background: "radial-gradient(circle, rgba(244,63,94,0.06) 0%, transparent 70%)",
+          bottom: "10%",
+          left: "-10%",
         }}
         animate={{
-          x: [0, 30, -20, 0],
-          y: [0, -40, 20, 0],
-        }}
-        transition={{ duration: 20, repeat: Infinity, ease: "easeInOut" }}
-      />
-      {/* Cyan accent */}
-      <motion.div
-        className="absolute w-[400px] h-[400px] rounded-full"
-        style={{
-          background: "radial-gradient(circle, rgba(0,210,211,0.08) 0%, transparent 70%)",
-          bottom: "20%",
-          left: "-5%",
-        }}
-        animate={{
-          x: [0, -20, 30, 0],
-          y: [0, 30, -20, 0],
+          x: [0, 40, -20, 0],
+          y: [0, -30, 40, 0],
+          scale: [1, 1.1, 0.95, 1],
         }}
         transition={{ duration: 25, repeat: Infinity, ease: "easeInOut" }}
       />
-      {/* Warm accent */}
+      {/* Emerald accent */}
       <motion.div
-        className="absolute w-[300px] h-[300px] rounded-full"
+        className="absolute w-[400px] h-[400px] rounded-full"
         style={{
-          background: "radial-gradient(circle, rgba(255,179,0,0.06) 0%, transparent 70%)",
-          top: "50%",
-          left: "40%",
+          background: "radial-gradient(circle, rgba(16,185,129,0.04) 0%, transparent 70%)",
+          top: "60%",
+          right: "20%",
         }}
         animate={{
-          x: [0, 40, -10, 0],
-          y: [0, -20, 40, 0],
+          x: [0, -30, 20, 0],
+          y: [0, 20, -30, 0],
         }}
-        transition={{ duration: 18, repeat: Infinity, ease: "easeInOut" }}
+        transition={{ duration: 20, repeat: Infinity, ease: "easeInOut" }}
+      />
+      {/* Amber warm glow */}
+      <motion.div
+        className="absolute w-[500px] h-[500px] rounded-full"
+        style={{
+          background: "radial-gradient(circle, rgba(245,158,11,0.03) 0%, transparent 70%)",
+          top: "30%",
+          left: "30%",
+        }}
+        animate={{
+          x: [0, 50, -30, 0],
+          y: [0, -40, 30, 0],
+        }}
+        transition={{ duration: 22, repeat: Infinity, ease: "easeInOut" }}
       />
     </div>
   );
@@ -91,16 +105,26 @@ function FloatingOrbs() {
 function GridBackground() {
   return (
     <div className="absolute inset-0 overflow-hidden pointer-events-none">
-      <div className="absolute inset-0 grid-bg opacity-40" />
+      <div className="absolute inset-0 grid-bg opacity-30" />
       {/* Horizontal scanline */}
       <motion.div
         className="absolute left-0 w-full h-px"
         style={{
           background:
-            "linear-gradient(90deg, transparent 0%, rgba(108,92,231,0.3) 50%, transparent 100%)",
+            "linear-gradient(90deg, transparent 0%, rgba(139,92,246,0.2) 30%, rgba(139,92,246,0.3) 50%, rgba(139,92,246,0.2) 70%, transparent 100%)",
         }}
         animate={{ top: ["0%", "100%"] }}
-        transition={{ duration: 8, repeat: Infinity, ease: "linear" }}
+        transition={{ duration: 12, repeat: Infinity, ease: "linear" }}
+      />
+      {/* Vertical scanline */}
+      <motion.div
+        className="absolute top-0 h-full w-px"
+        style={{
+          background:
+            "linear-gradient(180deg, transparent 0%, rgba(139,92,246,0.15) 50%, transparent 100%)",
+        }}
+        animate={{ left: ["0%", "100%"] }}
+        transition={{ duration: 15, repeat: Infinity, ease: "linear" }}
       />
     </div>
   );
@@ -109,18 +133,26 @@ function GridBackground() {
 /* ─── Particle Dots ─── */
 function ParticleField() {
   const [particles, setParticles] = useState<
-    { id: number; x: number; y: number; size: number; delay: number; duration: number }[]
+    { id: number; x: number; y: number; size: number; delay: number; duration: number; color: string }[]
   >([]);
 
   useEffect(() => {
+    const colors = [
+      "rgba(139, 92, 246, 0.5)",
+      "rgba(167, 139, 250, 0.4)",
+      "rgba(99, 102, 241, 0.4)",
+      "rgba(244, 63, 94, 0.3)",
+      "rgba(245, 158, 11, 0.3)",
+    ];
     setParticles(
-      Array.from({ length: 30 }, (_, i) => ({
+      Array.from({ length: 40 }, (_, i) => ({
         id: i,
         x: Math.random() * 100,
         y: Math.random() * 100,
-        size: Math.random() * 2 + 1,
+        size: Math.random() * 2.5 + 0.5,
         delay: Math.random() * 5,
-        duration: Math.random() * 10 + 10,
+        duration: Math.random() * 12 + 8,
+        color: colors[Math.floor(Math.random() * colors.length)],
       }))
     );
   }, []);
@@ -138,11 +170,12 @@ function ParticleField() {
             height: p.size,
             left: `${p.x}%`,
             top: `${p.y}%`,
-            background: "rgba(108, 92, 231, 0.4)",
+            background: p.color,
+            boxShadow: `0 0 ${p.size * 4}px ${p.color}`,
           }}
           animate={{
-            opacity: [0, 0.6, 0],
-            scale: [0.5, 1, 0.5],
+            opacity: [0, 0.8, 0],
+            scale: [0.5, 1.2, 0.5],
           }}
           transition={{
             duration: p.duration,
@@ -162,34 +195,39 @@ function FeatureCard({
   title,
   description,
   index,
+  accentColor,
 }: {
   icon: React.ElementType;
   title: string;
   description: string;
   index: number;
+  accentColor: string;
 }) {
   return (
     <motion.div
       initial={{ opacity: 0, y: 30 }}
       whileInView={{ opacity: 1, y: 0 }}
-      transition={{ duration: 0.6, delay: index * 0.1 }}
+      transition={{ duration: 0.6, delay: index * 0.08 }}
       viewport={{ once: true }}
-      whileHover={{ y: -4, transition: { duration: 0.2 } }}
-      className="group relative p-6 rounded-2xl glass cursor-default"
+      whileHover={{ y: -6, transition: { duration: 0.25 } }}
+      className="group relative p-7 rounded-2xl glass-card cursor-default transition-all duration-500"
     >
-      {/* Hover glow */}
-      <div className="absolute inset-0 rounded-2xl opacity-0 group-hover:opacity-100 transition-opacity duration-500"
+      {/* Hover gradient glow */}
+      <div
+        className="absolute inset-0 rounded-2xl opacity-0 group-hover:opacity-100 transition-opacity duration-700"
         style={{
-          background: "radial-gradient(circle at 50% 50%, rgba(108,92,231,0.08) 0%, transparent 70%)",
+          background: `radial-gradient(circle at 50% 0%, ${accentColor}12 0%, transparent 70%)`,
         }}
       />
       <div className="relative z-10">
-        <div className="w-10 h-10 rounded-xl flex items-center justify-center mb-4"
-          style={{ background: "rgba(108, 92, 231, 0.12)" }}>
-          <Icon size={20} className="text-[#6C5CE7]" />
+        <div
+          className="w-11 h-11 rounded-xl flex items-center justify-center mb-5 transition-all duration-300 group-hover:scale-110"
+          style={{ background: `${accentColor}15`, border: `1px solid ${accentColor}20` }}
+        >
+          <Icon size={20} style={{ color: accentColor }} />
         </div>
-        <h3 className="text-sm font-semibold text-white mb-2">{title}</h3>
-        <p className="text-xs leading-relaxed" style={{ color: "var(--muted-foreground)" }}>
+        <h3 className="text-[15px] font-medium text-white/95 mb-2.5 tracking-[-0.01em]">{title}</h3>
+        <p className="text-[13px] leading-[1.7] text-[#6B6D78]">
           {description}
         </p>
       </div>
@@ -213,15 +251,56 @@ function StatCard({
     <motion.div
       initial={{ opacity: 0, scale: 0.9 }}
       whileInView={{ opacity: 1, scale: 1 }}
-      transition={{ duration: 0.5, delay: index * 0.15 }}
+      transition={{ duration: 0.5, delay: index * 0.12 }}
       viewport={{ once: true }}
-      className="text-center"
+      className="text-center group"
     >
-      <div className="text-3xl font-bold gradient-text mb-1">
+      <div className="text-3xl font-light gradient-text mb-1.5 tracking-[-0.03em] group-hover:animate-text-glow transition-all duration-300">
         <AnimatedCounter value={value} suffix={suffix} />
       </div>
-      <div className="text-xs" style={{ color: "var(--muted-foreground)" }}>
+      <div className="text-[11px] font-medium uppercase tracking-[0.1em] text-[#4B4D58]">
         {label}
+      </div>
+    </motion.div>
+  );
+}
+
+/* ─── Live Ticker ─── */
+function LiveTicker() {
+  const tickers = [
+    { symbol: "NIFTY 50", price: "22,547.55", change: "+0.42%", up: true },
+    { symbol: "BANK NIFTY", price: "48,632.10", change: "-0.26%", up: false },
+    { symbol: "FIN NIFTY", price: "21,845.90", change: "+0.31%", up: true },
+    { symbol: "SENSEX", price: "74,339.44", change: "+0.42%", up: true },
+    { symbol: "INDIA VIX", price: "13.25", change: "-2.15%", up: false },
+  ];
+
+  return (
+    <motion.div
+      initial={{ opacity: 0 }}
+      animate={{ opacity: 1 }}
+      transition={{ delay: 1.2, duration: 0.8 }}
+      className="w-full max-w-4xl mx-auto mt-14"
+    >
+      <div className="flex items-center justify-center gap-6 flex-wrap">
+        {tickers.map((t, i) => (
+          <motion.div
+            key={t.symbol}
+            initial={{ opacity: 0, y: 10 }}
+            animate={{ opacity: 1, y: 0 }}
+            transition={{ delay: 1.4 + i * 0.1 }}
+            className="flex items-center gap-2 px-4 py-2 rounded-xl glass-subtle"
+          >
+            <span className="text-[11px] font-medium text-[#6B6D78]">{t.symbol}</span>
+            <span className="text-[12px] font-medium text-white/90">{t.price}</span>
+            <span
+              className="text-[11px] font-medium"
+              style={{ color: t.up ? "var(--call-green)" : "var(--put-red)" }}
+            >
+              {t.change}
+            </span>
+          </motion.div>
+        ))}
       </div>
     </motion.div>
   );
@@ -236,44 +315,50 @@ export default function LandingPage() {
       icon: BarChart3,
       title: "Real-Time Option Chains",
       description: "Live option chain data with OI heatmaps, PCR ratios, and Max Pain analysis across all major Indian indices.",
+      accentColor: "#8B5CF6",
     },
     {
       icon: Activity,
       title: "Greeks & IV Surface",
       description: "Delta, Gamma, Theta, Vega — all in real-time. Visualize the 3D IV surface to spot mispriced options.",
+      accentColor: "#6366F1",
     },
     {
       icon: Layers,
       title: "Strategy Builder",
       description: "Build multi-leg strategies visually. See payoff diagrams, breakevens, and risk metrics before executing.",
+      accentColor: "#EC4899",
     },
     {
       icon: Zap,
       title: "Smart Alerts",
-      description: "Unusual OI buildup detection, IV crush alerts, and PCR shift notifications in real-time.",
+      description: "Unusual OI buildup detection, IV crush alerts, and PCR shift notifications delivered in real-time.",
+      accentColor: "#F59E0B",
     },
     {
       icon: TrendingUp,
       title: "Market Pulse",
       description: "Live index tracking with expected move ranges, VIX correlation, and institutional flow analysis.",
+      accentColor: "#10B981",
     },
     {
       icon: Shield,
       title: "Risk Analytics",
       description: "Portfolio Greeks aggregation, margin requirements, and scenario analysis for complex positions.",
+      accentColor: "#06B6D4",
     },
   ];
 
   const stats = [
-    { value: 500, suffix: "+", label: "Strike Prices Tracked" },
+    { value: 500, suffix: "+", label: "Strike Prices" },
     { value: 50, suffix: "ms", label: "Data Latency" },
     { value: 6, suffix: "", label: "Index Coverage" },
-    { value: 24, suffix: "/7", label: "Analytics Engine" },
+    { value: 24, suffix: "/7", label: "Analytics" },
   ];
 
   return (
-    <div className="min-h-screen relative overflow-hidden" style={{ background: "#0A0B0F" }}>
-      <FloatingOrbs />
+    <div className="min-h-screen relative overflow-hidden" style={{ background: "#07080C" }}>
+      <AuroraBackground />
       <GridBackground />
       <ParticleField />
 
@@ -282,52 +367,49 @@ export default function LandingPage() {
         initial={{ opacity: 0, y: -20 }}
         animate={{ opacity: 1, y: 0 }}
         transition={{ duration: 0.6 }}
-        className="fixed top-0 left-0 right-0 z-50 glass"
+        className="fixed top-0 left-0 right-0 z-50 glass-nav"
       >
-        <div className="max-w-7xl mx-auto px-6 h-16 flex items-center justify-between">
+        <div className="max-w-7xl mx-auto px-6 h-14 flex items-center justify-between">
           {/* Logo */}
           <Link href="/" className="flex items-center gap-2.5 group">
-            <div className="w-8 h-8 rounded-lg flex items-center justify-center relative overflow-hidden"
-              style={{ background: "linear-gradient(135deg, #6C5CE7 0%, #a29bfe 100%)" }}>
-              <span className="text-white text-sm font-black tracking-tight">OX</span>
+            <div
+              className="w-7 h-7 rounded-lg flex items-center justify-center relative overflow-hidden"
+              style={{
+                background: "linear-gradient(135deg, #8B5CF6 0%, #7C3AED 100%)",
+                boxShadow: "0 0 20px rgba(139, 92, 246, 0.3)",
+              }}
+            >
+              <span className="text-white text-[10px] font-bold tracking-tight">OX</span>
               <motion.div
                 className="absolute inset-0"
                 style={{
-                  background: "linear-gradient(135deg, transparent 0%, rgba(255,255,255,0.2) 50%, transparent 100%)",
+                  background:
+                    "linear-gradient(135deg, transparent 0%, rgba(255,255,255,0.25) 50%, transparent 100%)",
                 }}
                 animate={{ x: ["-100%", "200%"] }}
-                transition={{ duration: 3, repeat: Infinity, repeatDelay: 2 }}
+                transition={{ duration: 3, repeat: Infinity, repeatDelay: 3 }}
               />
             </div>
-            <span className="text-white text-lg font-bold tracking-tight">
-              Opti<span className="text-[#6C5CE7]">X</span>
+            <span className="text-white text-base font-medium tracking-[-0.02em]">
+              Opti<span className="text-[#A78BFA]">X</span>
             </span>
           </Link>
 
           {/* Nav Links */}
-          <div className="hidden md:flex items-center gap-1">
+          <div className="hidden md:flex items-center gap-0.5">
             {[
-              { label: "Option Chain", href: "/option-chain", external: true },
-              { label: "Strategy Lab", href: "#", external: false },
-              { label: "Analytics", href: "#", external: false },
-              { label: "Docs", href: "#", external: false },
+              { label: "Option Chain", href: "/option-chain" },
+              { label: "Strategy Lab", href: "#" },
+              { label: "Analytics", href: "#" },
+              { label: "Docs", href: "#" },
             ].map((item) => (
               <Link
                 key={item.label}
                 href={item.href}
-                target={item.external ? "_blank" : undefined}
-                className="relative px-4 py-2 text-sm font-medium transition-colors duration-200 rounded-lg group"
-                style={{ color: "var(--muted-foreground)" }}
+                target={item.href.startsWith("/") ? "_blank" : undefined}
+                className="relative px-4 py-2 text-[13px] font-normal transition-all duration-200 rounded-lg group text-[#6B6D78] hover:text-white/90"
               >
-                <span className="relative z-10 group-hover:text-white transition-colors duration-200">
-                  {item.label}
-                </span>
-                <motion.div
-                  className="absolute inset-0 rounded-lg opacity-0 group-hover:opacity-100"
-                  style={{ background: "rgba(108, 92, 231, 0.08)" }}
-                  layoutId="nav-hover"
-                  transition={{ duration: 0.2 }}
-                />
+                {item.label}
               </Link>
             ))}
           </div>
@@ -336,38 +418,31 @@ export default function LandingPage() {
           <Link
             href="/option-chain"
             target="_blank"
-            className="hidden md:flex items-center gap-2 px-5 py-2 rounded-xl text-sm font-semibold text-white transition-all duration-300 hover:shadow-[0_0_30px_rgba(108,92,231,0.3)]"
-            style={{
-              background: "linear-gradient(135deg, #6C5CE7 0%, #a29bfe 100%)",
-            }}
+            className="hidden md:flex items-center gap-2 px-5 py-2 rounded-xl text-[13px] font-medium text-white btn-primary"
           >
             Launch Terminal
-            <ArrowUpRight size={14} />
+            <ArrowUpRight size={13} />
           </Link>
         </div>
       </motion.nav>
 
       {/* ─── Hero Section ─── */}
-      <section ref={heroRef} className="relative pt-40 pb-28 px-6">
+      <section ref={heroRef} className="relative pt-36 pb-20 px-6">
         <div className="max-w-5xl mx-auto text-center relative z-10">
           {/* Badge */}
           <motion.div
             initial={{ opacity: 0, y: 20 }}
             animate={{ opacity: 1, y: 0 }}
             transition={{ duration: 0.6, delay: 0.2 }}
-            className="inline-flex items-center gap-2 px-4 py-1.5 rounded-full mb-8"
-            style={{
-              background: "rgba(108, 92, 231, 0.1)",
-              border: "1px solid rgba(108, 92, 231, 0.2)",
-            }}
+            className="inline-flex items-center gap-2.5 px-4 py-1.5 rounded-full mb-8 glass-glow"
           >
             <motion.div
               className="w-1.5 h-1.5 rounded-full"
-              style={{ background: "#00E676" }}
+              style={{ background: "#10B981", boxShadow: "0 0 8px #10B981" }}
               animate={{ opacity: [1, 0.3, 1] }}
               transition={{ duration: 2, repeat: Infinity }}
             />
-            <span className="text-xs font-medium" style={{ color: "#a29bfe" }}>
+            <span className="text-[11px] font-normal tracking-wide text-[#A78BFA]">
               Live Market Data — Powered by Groww API
             </span>
           </motion.div>
@@ -377,10 +452,11 @@ export default function LandingPage() {
             initial={{ opacity: 0, y: 30 }}
             animate={{ opacity: 1, y: 0 }}
             transition={{ duration: 0.8, delay: 0.3 }}
-            className="text-5xl md:text-7xl lg:text-8xl font-black tracking-tight leading-[0.9] mb-6"
+            className="text-5xl md:text-7xl lg:text-[5.5rem] font-extralight tracking-[-0.04em] leading-[0.95] mb-7"
           >
-            <span className="text-white">Options </span>
-            <span className="gradient-text">Decoded.</span>
+            <span className="text-white">Options</span>
+            <br />
+            <span className="gradient-text-hero font-light">Decoded.</span>
           </motion.h1>
 
           {/* Sub */}
@@ -388,8 +464,7 @@ export default function LandingPage() {
             initial={{ opacity: 0, y: 20 }}
             animate={{ opacity: 1, y: 0 }}
             transition={{ duration: 0.6, delay: 0.5 }}
-            className="text-base md:text-lg max-w-2xl mx-auto mb-10 leading-relaxed"
-            style={{ color: "var(--muted-foreground)" }}
+            className="text-[16px] md:text-[18px] max-w-xl mx-auto mb-10 leading-[1.7] font-light text-[#6B6D78]"
           >
             Professional-grade options analytics for the Indian stock market.
             Real-time chains, Greeks surfaces, and strategy building — all in one
@@ -406,18 +481,15 @@ export default function LandingPage() {
             <Link
               href="/option-chain"
               target="_blank"
-              className="group relative inline-flex items-center gap-2.5 px-8 py-3.5 rounded-xl text-sm font-bold text-white overflow-hidden transition-all duration-300 hover:shadow-[0_0_40px_rgba(108,92,231,0.4)]"
-              style={{
-                background: "linear-gradient(135deg, #6C5CE7 0%, #a29bfe 100%)",
-              }}
+              className="group relative inline-flex items-center gap-2.5 px-8 py-3.5 rounded-xl text-[14px] font-medium text-white overflow-hidden btn-primary"
             >
               <span className="relative z-10">Open Option Chain</span>
-              <ArrowUpRight size={16} className="relative z-10" />
+              <ArrowUpRight size={15} className="relative z-10" />
               <motion.div
                 className="absolute inset-0"
                 style={{
                   background:
-                    "linear-gradient(135deg, transparent 0%, rgba(255,255,255,0.15) 50%, transparent 100%)",
+                    "linear-gradient(135deg, transparent 0%, rgba(255,255,255,0.12) 50%, transparent 100%)",
                 }}
                 animate={{ x: ["-100%", "200%"] }}
                 transition={{ duration: 2.5, repeat: Infinity, repeatDelay: 3 }}
@@ -425,33 +497,35 @@ export default function LandingPage() {
             </Link>
             <Link
               href="#features"
-              className="inline-flex items-center gap-2 px-6 py-3.5 rounded-xl text-sm font-medium transition-all duration-200 glass hover:border-[rgba(108,92,231,0.3)]"
-              style={{ color: "var(--muted-foreground)" }}
+              className="inline-flex items-center gap-2 px-6 py-3.5 rounded-xl text-[14px] font-normal transition-all duration-300 glass-card text-[#A78BFA] hover:text-white"
             >
               Explore Features
               <ChevronRight size={14} />
             </Link>
           </motion.div>
+
+          {/* Live Ticker */}
+          <LiveTicker />
         </div>
 
         {/* Hero gradient backdrop */}
         <div
-          className="absolute bottom-0 left-1/2 -translate-x-1/2 w-[800px] h-[400px] rounded-full blur-[120px] opacity-20 pointer-events-none"
+          className="absolute bottom-0 left-1/2 -translate-x-1/2 w-[1000px] h-[500px] rounded-full blur-[150px] opacity-15 pointer-events-none"
           style={{
-            background: "radial-gradient(circle, #6C5CE7 0%, transparent 70%)",
+            background: "radial-gradient(circle, #8B5CF6 0%, #6366F1 40%, transparent 70%)",
           }}
         />
       </section>
 
       {/* ─── Stats ─── */}
       <section className="relative py-16 px-6 z-10">
-        <div className="max-w-4xl mx-auto">
+        <div className="max-w-3xl mx-auto">
           <motion.div
             initial={{ opacity: 0, y: 20 }}
             whileInView={{ opacity: 1, y: 0 }}
             transition={{ duration: 0.6 }}
             viewport={{ once: true }}
-            className="grid grid-cols-2 md:grid-cols-4 gap-8 p-8 rounded-2xl glass"
+            className="grid grid-cols-2 md:grid-cols-4 gap-8 p-8 rounded-2xl glass-card"
           >
             {stats.map((stat, i) => (
               <StatCard key={i} {...stat} index={i} />
@@ -470,17 +544,27 @@ export default function LandingPage() {
             viewport={{ once: true }}
             className="text-center mb-16"
           >
-            <h2 className="text-3xl md:text-4xl font-bold text-white mb-4">
+            <motion.div
+              initial={{ opacity: 0, scale: 0.9 }}
+              whileInView={{ opacity: 1, scale: 1 }}
+              transition={{ duration: 0.5 }}
+              viewport={{ once: true }}
+              className="inline-flex items-center gap-2 px-3.5 py-1 rounded-full mb-6 text-[11px] font-normal tracking-wide text-[#A78BFA] glass-glow"
+            >
+              <Sparkles size={12} />
+              Platform Features
+            </motion.div>
+            <h2 className="text-3xl md:text-4xl font-light text-white/95 mb-4 tracking-[-0.03em]">
               Everything you need to{" "}
               <span className="gradient-text">trade smarter</span>
             </h2>
-            <p className="text-sm max-w-lg mx-auto" style={{ color: "var(--muted-foreground)" }}>
+            <p className="text-[14px] max-w-lg mx-auto font-light text-[#6B6D78] leading-[1.7]">
               Built for traders who demand precision. Every pixel designed for
               speed and clarity.
             </p>
           </motion.div>
 
-          <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-4">
+          <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-5">
             {features.map((feature, i) => (
               <FeatureCard key={i} {...feature} index={i} />
             ))}
@@ -496,38 +580,89 @@ export default function LandingPage() {
             whileInView={{ opacity: 1, y: 0 }}
             transition={{ duration: 0.8 }}
             viewport={{ once: true }}
-            className="relative rounded-2xl overflow-hidden glass p-px"
+            className="text-center mb-12"
           >
-            <div className="rounded-2xl overflow-hidden" style={{ background: "#0D0E13" }}>
+            <h2 className="text-3xl md:text-4xl font-light text-white/95 mb-4 tracking-[-0.03em]">
+              See it in <span className="gradient-text">action</span>
+            </h2>
+            <p className="text-[14px] font-light text-[#6B6D78]">
+              A professional trading terminal, right in your browser
+            </p>
+          </motion.div>
+
+          <motion.div
+            initial={{ opacity: 0, y: 40 }}
+            whileInView={{ opacity: 1, y: 0 }}
+            transition={{ duration: 0.8, delay: 0.2 }}
+            viewport={{ once: true }}
+            className="relative rounded-2xl overflow-hidden glass-card"
+          >
+            <div className="rounded-2xl overflow-hidden" style={{ background: "#0A0B10" }}>
               {/* Terminal header */}
-              <div className="flex items-center gap-2 px-5 py-3 border-b" style={{ borderColor: "var(--border)" }}>
-                <div className="w-3 h-3 rounded-full" style={{ background: "#FF5F56" }} />
-                <div className="w-3 h-3 rounded-full" style={{ background: "#FFBD2E" }} />
-                <div className="w-3 h-3 rounded-full" style={{ background: "#27CA40" }} />
-                <span className="ml-4 text-xs" style={{ color: "var(--muted-foreground)" }}>
-                  OptiX Terminal — Option Chain
+              <div
+                className="flex items-center gap-2 px-5 py-3.5 border-b"
+                style={{ borderColor: "rgba(255,255,255,0.04)" }}
+              >
+                <div className="w-2.5 h-2.5 rounded-full" style={{ background: "#EF4444" }} />
+                <div className="w-2.5 h-2.5 rounded-full" style={{ background: "#F59E0B" }} />
+                <div className="w-2.5 h-2.5 rounded-full" style={{ background: "#10B981" }} />
+                <span className="ml-4 text-[11px] font-normal text-[#4B4D58]">
+                  OptiX Terminal — NIFTY Option Chain
                 </span>
+                <div className="ml-auto flex items-center gap-2">
+                  <span className="text-[10px] text-[#4B4D58]">LIVE</span>
+                  <motion.div
+                    className="w-1.5 h-1.5 rounded-full"
+                    style={{ background: "#10B981", boxShadow: "0 0 6px #10B981" }}
+                    animate={{ opacity: [1, 0.3, 1] }}
+                    transition={{ duration: 1.5, repeat: Infinity }}
+                  />
+                </div>
               </div>
               {/* Mock table */}
               <div className="p-6 overflow-hidden">
-                <div className="flex items-center justify-between mb-4">
+                <div className="flex items-center justify-between mb-5">
                   <div className="flex items-center gap-3">
-                    <span className="text-xs font-bold text-white px-3 py-1 rounded-md"
-                      style={{ background: "rgba(108, 92, 231, 0.2)" }}>
+                    <span
+                      className="text-[11px] font-medium text-white px-3 py-1.5 rounded-lg"
+                      style={{ background: "rgba(139, 92, 246, 0.15)", border: "1px solid rgba(139,92,246,0.2)" }}
+                    >
                       NIFTY
                     </span>
-                    <span className="text-sm font-bold text-white">22,547.55</span>
-                    <span className="text-xs font-medium" style={{ color: "var(--call-green)" }}>
+                    <span className="text-sm font-normal text-white/90">22,547.55</span>
+                    <span className="text-[11px] font-normal" style={{ color: "var(--call-green)" }}>
                       +0.42%
                     </span>
                   </div>
-                  <div className="flex items-center gap-4 text-xs" style={{ color: "var(--muted-foreground)" }}>
-                    <span>PCR: <span className="text-white font-semibold">1.24</span></span>
-                    <span>Max Pain: <span className="text-[#FFB300] font-semibold">22,500</span></span>
+                  <div className="flex items-center gap-5 text-[11px] text-[#4B4D58]">
+                    <span>
+                      PCR: <span className="text-white/80 font-normal">1.24</span>
+                    </span>
+                    <span>
+                      Max Pain: <span className="text-[#F59E0B] font-normal">22,500</span>
+                    </span>
+                    <span>
+                      IV: <span className="text-[#A78BFA] font-normal">13.2%</span>
+                    </span>
                   </div>
                 </div>
-                {/* Mock rows */}
-                <div className="space-y-0.5">
+
+                {/* Header row */}
+                <div className="grid grid-cols-9 items-center text-[10px] uppercase tracking-wider py-2 px-3 text-[#4B4D58] font-normal mb-1"
+                  style={{ borderBottom: "1px solid rgba(255,255,255,0.03)" }}>
+                  <div>OI</div>
+                  <div>LTP</div>
+                  <div>IV</div>
+                  <div></div>
+                  <div className="text-center">Strike</div>
+                  <div></div>
+                  <div>IV</div>
+                  <div>LTP</div>
+                  <div className="text-right">OI</div>
+                </div>
+
+                {/* Data rows */}
+                <div className="space-y-0">
                   {[
                     { strike: "22400", callOI: "12.4L", putOI: "8.2L", callLTP: "247.30", putLTP: "98.15", callIV: "14.2", putIV: "15.1", isATM: false },
                     { strike: "22450", callOI: "18.7L", putOI: "11.3L", callLTP: "212.45", putLTP: "113.60", callIV: "13.8", putIV: "14.6", isATM: false },
@@ -539,67 +674,109 @@ export default function LandingPage() {
                       key={row.strike}
                       initial={{ opacity: 0, x: -10 }}
                       whileInView={{ opacity: 1, x: 0 }}
-                      transition={{ delay: 0.1 * i }}
+                      transition={{ delay: 0.08 * i }}
                       viewport={{ once: true }}
-                      className={`grid grid-cols-9 items-center text-xs py-2 px-3 rounded-lg ${row.isATM ? "atm-row" : ""
-                        }`}
-                      style={{
-                        background: row.isATM ? "var(--atm-highlight)" : "transparent",
-                      }}
+                      className={`grid grid-cols-9 items-center text-[12px] py-2.5 px-3 rounded-lg transition-all duration-300 ${
+                        row.isATM ? "glass-glow" : "hover:bg-[rgba(139,92,246,0.04)]"
+                      }`}
                     >
                       {/* Call side */}
-                      <div style={{ color: "var(--call-green)" }} className="font-medium">{row.callOI}</div>
-                      <div className="text-white">{row.callLTP}</div>
-                      <div style={{ color: "var(--muted-foreground)" }}>{row.callIV}%</div>
-                      <div className="w-full rounded-full h-1 mx-2"
+                      <div style={{ color: "var(--call-green)" }} className="font-normal">{row.callOI}</div>
+                      <div className="text-white/85 font-normal">{row.callLTP}</div>
+                      <div className="text-[#6B6D78]">{row.callIV}%</div>
+                      <div
+                        className="w-full rounded-full h-0.5 mx-2"
                         style={{
-                          background: `linear-gradient(to left, rgba(0,230,118,${parseFloat(row.callOI) / 30
-                            }), transparent)`,
+                          background: `linear-gradient(to left, rgba(16,185,129,${parseFloat(row.callOI) / 30}), transparent)`,
                         }}
                       />
                       {/* Strike */}
-                      <div className={`text-center font-bold ${row.isATM ? "text-[#6C5CE7]" : "text-white"}`}>
+                      <div className={`text-center font-medium ${row.isATM ? "text-[#A78BFA]" : "text-white/90"}`}>
                         {row.strike}
                       </div>
                       {/* Put side */}
-                      <div className="w-full rounded-full h-1 mx-2"
+                      <div
+                        className="w-full rounded-full h-0.5 mx-2"
                         style={{
-                          background: `linear-gradient(to right, rgba(255,82,82,${parseFloat(row.putOI) / 30
-                            }), transparent)`,
+                          background: `linear-gradient(to right, rgba(239,68,68,${parseFloat(row.putOI) / 30}), transparent)`,
                         }}
                       />
-                      <div style={{ color: "var(--muted-foreground)" }}>{row.putIV}%</div>
-                      <div className="text-white">{row.putLTP}</div>
-                      <div style={{ color: "var(--put-red)" }} className="font-medium text-right">{row.putOI}</div>
+                      <div className="text-[#6B6D78]">{row.putIV}%</div>
+                      <div className="text-white/85 font-normal">{row.putLTP}</div>
+                      <div style={{ color: "var(--put-red)" }} className="font-normal text-right">{row.putOI}</div>
                     </motion.div>
                   ))}
                 </div>
               </div>
             </div>
+
             {/* Glow effect */}
             <div
-              className="absolute -bottom-20 left-1/2 -translate-x-1/2 w-[600px] h-[200px] rounded-full blur-[80px] opacity-15 pointer-events-none"
-              style={{ background: "#6C5CE7" }}
+              className="absolute -bottom-20 left-1/2 -translate-x-1/2 w-[600px] h-[200px] rounded-full blur-[100px] opacity-10 pointer-events-none"
+              style={{ background: "#8B5CF6" }}
             />
           </motion.div>
         </div>
       </section>
 
+      {/* ─── CTA Section ─── */}
+      <section className="relative py-28 px-6 z-10">
+        <div className="max-w-3xl mx-auto text-center">
+          <motion.div
+            initial={{ opacity: 0, y: 30 }}
+            whileInView={{ opacity: 1, y: 0 }}
+            transition={{ duration: 0.8 }}
+            viewport={{ once: true }}
+          >
+            <h2 className="text-3xl md:text-5xl font-extralight text-white/95 mb-6 tracking-[-0.03em]">
+              Ready to trade with{" "}
+              <span className="gradient-text-multi">precision</span>?
+            </h2>
+            <p className="text-[15px] font-light text-[#6B6D78] mb-10 max-w-md mx-auto leading-[1.7]">
+              Join thousands of traders who use OptiX to decode the options market
+              every single day.
+            </p>
+            <Link
+              href="/option-chain"
+              target="_blank"
+              className="group relative inline-flex items-center gap-2.5 px-10 py-4 rounded-2xl text-[15px] font-medium text-white overflow-hidden btn-primary"
+            >
+              <span className="relative z-10">Start Trading Now</span>
+              <ArrowUpRight size={16} className="relative z-10 group-hover:translate-x-0.5 group-hover:-translate-y-0.5 transition-transform" />
+              <motion.div
+                className="absolute inset-0"
+                style={{
+                  background:
+                    "linear-gradient(135deg, transparent 0%, rgba(255,255,255,0.15) 50%, transparent 100%)",
+                }}
+                animate={{ x: ["-100%", "200%"] }}
+                transition={{ duration: 2.5, repeat: Infinity, repeatDelay: 2 }}
+              />
+            </Link>
+          </motion.div>
+        </div>
+        {/* Big glow */}
+        <div
+          className="absolute top-1/2 left-1/2 -translate-x-1/2 -translate-y-1/2 w-[800px] h-[400px] rounded-full blur-[150px] opacity-10 pointer-events-none"
+          style={{ background: "linear-gradient(135deg, #8B5CF6, #EC4899)" }}
+        />
+      </section>
+
       {/* ─── Footer ─── */}
-      <footer className="relative py-16 px-6 z-10 border-t" style={{ borderColor: "var(--border)" }}>
+      <footer className="relative py-12 px-6 z-10 border-t" style={{ borderColor: "rgba(255,255,255,0.03)" }}>
         <div className="max-w-6xl mx-auto flex flex-col md:flex-row items-center justify-between gap-6">
           <div className="flex items-center gap-2">
             <div
-              className="w-7 h-7 rounded-lg flex items-center justify-center"
-              style={{ background: "linear-gradient(135deg, #6C5CE7 0%, #a29bfe 100%)" }}
+              className="w-6 h-6 rounded-md flex items-center justify-center"
+              style={{ background: "linear-gradient(135deg, #8B5CF6 0%, #7C3AED 100%)" }}
             >
-              <span className="text-white text-xs font-black">OX</span>
+              <span className="text-white text-[8px] font-bold">OX</span>
             </div>
-            <span className="text-sm font-bold text-white">
-              Opti<span className="text-[#6C5CE7]">X</span>
+            <span className="text-[13px] font-normal text-white/60">
+              Opti<span className="text-[#A78BFA]">X</span>
             </span>
           </div>
-          <p className="text-xs" style={{ color: "var(--muted-foreground)" }}>
+          <p className="text-[11px] text-[#4B4D58]">
             © 2026 OptiX. Professional Options Analytics for Indian Markets.
           </p>
           <div className="flex items-center gap-6">
@@ -607,8 +784,7 @@ export default function LandingPage() {
               <a
                 key={link}
                 href="#"
-                className="text-xs transition-colors duration-200 hover:text-white"
-                style={{ color: "var(--muted-foreground)" }}
+                className="text-[11px] transition-colors duration-200 text-[#4B4D58] hover:text-white/70"
               >
                 {link}
               </a>

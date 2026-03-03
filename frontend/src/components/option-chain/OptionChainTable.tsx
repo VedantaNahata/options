@@ -10,7 +10,6 @@ import {
     TableHeader,
     TableRow,
 } from "@/components/ui/table";
-import { ScrollArea } from "@/components/ui/scroll-area";
 import {
     Tooltip,
     TooltipContent,
@@ -68,7 +67,7 @@ function isUnusualOI(oi: number, maxOI: number): boolean {
 function SkeletonRow() {
     return (
         <TableRow className="border-b border-white/[0.03]">
-            {Array.from({ length: 21 }).map((_, i) => (
+            {Array.from({ length: 19 }).map((_, i) => (
                 <TableCell key={i} className="py-2">
                     <div className="h-3 w-full rounded bg-white/[0.04] animate-shimmer" />
                 </TableCell>
@@ -78,8 +77,8 @@ function SkeletonRow() {
 }
 
 /* ─── Column Headers ─── */
-const CALL_COLUMNS = ["Delta", "Theta", "IV", "Vol", "OI Chg", "OI", "Ask", "Bid", "Chg%", "LTP"];
-const PUT_COLUMNS = ["LTP", "Chg%", "Bid", "Ask", "OI", "OI Chg", "Vol", "IV", "Theta", "Delta"];
+const CALL_COLUMNS = ["Rho", "Vega", "Gamma", "Delta", "Theta", "IV", "Vol", "OI", "LTP"];
+const PUT_COLUMNS = ["LTP", "OI", "Vol", "IV", "Theta", "Delta", "Gamma", "Vega", "Rho"];
 
 export function OptionChainTable({
     strikes,
@@ -133,7 +132,7 @@ export function OptionChainTable({
                     <Table>
                         <TableHeader>
                             <TableRow className="border-b border-white/[0.06]">
-                                <TableHead colSpan={10} className="text-center text-[#00E676]/80 font-bold text-[10px] tracking-widest py-1.5"
+                                <TableHead colSpan={9} className="text-center text-[#00E676]/80 font-bold text-[10px] tracking-widest py-1.5"
                                     style={{ background: "rgba(0, 230, 118, 0.04)" }}>
                                     CALLS
                                 </TableHead>
@@ -141,7 +140,7 @@ export function OptionChainTable({
                                     style={{ background: "rgba(108, 92, 231, 0.08)" }}>
                                     STRIKE
                                 </TableHead>
-                                <TableHead colSpan={10} className="text-center text-[#FF5252]/80 font-bold text-[10px] tracking-widest py-1.5"
+                                <TableHead colSpan={9} className="text-center text-[#FF5252]/80 font-bold text-[10px] tracking-widest py-1.5"
                                     style={{ background: "rgba(255, 82, 82, 0.04)" }}>
                                     PUTS
                                 </TableHead>
@@ -159,15 +158,14 @@ export function OptionChainTable({
     }
 
     return (
-        <div className="flex-1 overflow-hidden" ref={scrollContainerRef}>
-            <ScrollArea className="h-full">
-                <div className="option-chain-table">
+        <div className="flex-1 overflow-auto" ref={scrollContainerRef}>
+            <div className="option-chain-table">
                     <Table>
                         <TableHeader className="sticky top-0 z-20" style={{ background: "#0D0E13" }}>
                             {/* Section headers */}
                             <TableRow className="border-b border-white/[0.06]">
                                 <TableHead
-                                    colSpan={10}
+                                    colSpan={9}
                                     className="text-center font-bold text-[10px] tracking-[0.15em] py-1.5"
                                     style={{ color: "rgba(0, 230, 118, 0.7)", background: "rgba(0, 230, 118, 0.04)" }}
                                 >
@@ -180,7 +178,7 @@ export function OptionChainTable({
                                     STRIKE
                                 </TableHead>
                                 <TableHead
-                                    colSpan={10}
+                                    colSpan={9}
                                     className="text-center font-bold text-[10px] tracking-[0.15em] py-1.5"
                                     style={{ color: "rgba(255, 82, 82, 0.7)", background: "rgba(255, 82, 82, 0.04)" }}
                                 >
@@ -249,6 +247,30 @@ export function OptionChainTable({
                                             }}
                                         >
                                             {/* ═══ CALL SIDE ═══ */}
+                                            {/* Rho */}
+                                            <TableCell className="text-center text-[11px]"
+                                                style={{
+                                                    color: "var(--muted-foreground)",
+                                                    background: isCallITM ? "rgba(255,255,255,0.015)" : undefined,
+                                                }}>
+                                                {formatGreek(strike.CE?.greeks?.rho)}
+                                            </TableCell>
+                                            {/* Vega */}
+                                            <TableCell className="text-center text-[11px]"
+                                                style={{
+                                                    color: "var(--muted-foreground)",
+                                                    background: isCallITM ? "rgba(255,255,255,0.015)" : undefined,
+                                                }}>
+                                                {formatGreek(strike.CE?.greeks?.vega)}
+                                            </TableCell>
+                                            {/* Gamma */}
+                                            <TableCell className="text-center text-[11px]"
+                                                style={{
+                                                    color: "var(--muted-foreground)",
+                                                    background: isCallITM ? "rgba(255,255,255,0.015)" : undefined,
+                                                }}>
+                                                {formatGreek(strike.CE?.greeks?.gamma)}
+                                            </TableCell>
                                             {/* Delta */}
                                             <TableCell className="text-center text-[11px]"
                                                 style={{
@@ -281,14 +303,6 @@ export function OptionChainTable({
                                                 }}>
                                                 {formatNumber(strike.CE?.volume)}
                                             </TableCell>
-                                            {/* OI Change (placeholder, API doesn't provide directly) */}
-                                            <TableCell className="text-center text-[11px]"
-                                                style={{
-                                                    color: "var(--muted-foreground)",
-                                                    background: isCallITM ? "rgba(255,255,255,0.015)" : undefined,
-                                                }}>
-                                                —
-                                            </TableCell>
                                             {/* OI with heatmap */}
                                             <TableCell
                                                 className={`text-center text-[11px] font-medium ${callUnusual ? "animate-pulse-amber" : ""
@@ -310,30 +324,6 @@ export function OptionChainTable({
                                                         OI: {strike.CE?.open_interest?.toLocaleString() || 0}
                                                     </TooltipContent>
                                                 </Tooltip>
-                                            </TableCell>
-                                            {/* Ask */}
-                                            <TableCell className="text-center text-[11px]"
-                                                style={{
-                                                    color: "var(--muted-foreground)",
-                                                    background: isCallITM ? "rgba(255,255,255,0.015)" : undefined,
-                                                }}>
-                                                —
-                                            </TableCell>
-                                            {/* Bid */}
-                                            <TableCell className="text-center text-[11px]"
-                                                style={{
-                                                    color: "var(--muted-foreground)",
-                                                    background: isCallITM ? "rgba(255,255,255,0.015)" : undefined,
-                                                }}>
-                                                —
-                                            </TableCell>
-                                            {/* Change % */}
-                                            <TableCell className="text-center text-[11px]"
-                                                style={{
-                                                    color: "var(--muted-foreground)",
-                                                    background: isCallITM ? "rgba(255,255,255,0.015)" : undefined,
-                                                }}>
-                                                —
                                             </TableCell>
                                             {/* LTP */}
                                             <TableCell
@@ -386,30 +376,6 @@ export function OptionChainTable({
                                             >
                                                 {formatPrice(strike.PE?.ltp)}
                                             </TableCell>
-                                            {/* Change % */}
-                                            <TableCell className="text-center text-[11px]"
-                                                style={{
-                                                    color: "var(--muted-foreground)",
-                                                    background: isPutITM ? "rgba(255,255,255,0.015)" : undefined,
-                                                }}>
-                                                —
-                                            </TableCell>
-                                            {/* Bid */}
-                                            <TableCell className="text-center text-[11px]"
-                                                style={{
-                                                    color: "var(--muted-foreground)",
-                                                    background: isPutITM ? "rgba(255,255,255,0.015)" : undefined,
-                                                }}>
-                                                —
-                                            </TableCell>
-                                            {/* Ask */}
-                                            <TableCell className="text-center text-[11px]"
-                                                style={{
-                                                    color: "var(--muted-foreground)",
-                                                    background: isPutITM ? "rgba(255,255,255,0.015)" : undefined,
-                                                }}>
-                                                —
-                                            </TableCell>
                                             {/* OI with heatmap */}
                                             <TableCell
                                                 className={`text-center text-[11px] font-medium ${putUnusual ? "animate-pulse-amber" : ""
@@ -431,14 +397,6 @@ export function OptionChainTable({
                                                         OI: {strike.PE?.open_interest?.toLocaleString() || 0}
                                                     </TooltipContent>
                                                 </Tooltip>
-                                            </TableCell>
-                                            {/* OI Change */}
-                                            <TableCell className="text-center text-[11px]"
-                                                style={{
-                                                    color: "var(--muted-foreground)",
-                                                    background: isPutITM ? "rgba(255,255,255,0.015)" : undefined,
-                                                }}>
-                                                —
                                             </TableCell>
                                             {/* Volume */}
                                             <TableCell className="text-center text-[11px]"
@@ -472,14 +430,37 @@ export function OptionChainTable({
                                                 }}>
                                                 {formatGreek(strike.PE?.greeks?.delta)}
                                             </TableCell>
+                                            {/* Gamma */}
+                                            <TableCell className="text-center text-[11px]"
+                                                style={{
+                                                    color: "var(--muted-foreground)",
+                                                    background: isPutITM ? "rgba(255,255,255,0.015)" : undefined,
+                                                }}>
+                                                {formatGreek(strike.PE?.greeks?.gamma)}
+                                            </TableCell>
+                                            {/* Vega */}
+                                            <TableCell className="text-center text-[11px]"
+                                                style={{
+                                                    color: "var(--muted-foreground)",
+                                                    background: isPutITM ? "rgba(255,255,255,0.015)" : undefined,
+                                                }}>
+                                                {formatGreek(strike.PE?.greeks?.vega)}
+                                            </TableCell>
+                                            {/* Rho */}
+                                            <TableCell className="text-center text-[11px]"
+                                                style={{
+                                                    color: "var(--muted-foreground)",
+                                                    background: isPutITM ? "rgba(255,255,255,0.015)" : undefined,
+                                                }}>
+                                                {formatGreek(strike.PE?.greeks?.rho)}
+                                            </TableCell>
                                         </motion.tr>
                                     );
                                 })}
                             </AnimatePresence>
                         </TableBody>
                     </Table>
-                </div>
-            </ScrollArea>
+            </div>
         </div>
     );
 }

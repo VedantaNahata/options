@@ -6,7 +6,8 @@ import { TopBar } from "@/components/option-chain/TopBar";
 import { AnalyticsBar } from "@/components/option-chain/AnalyticsBar";
 import { OptionChainTable } from "@/components/option-chain/OptionChainTable";
 import { StrategyBuilder } from "@/components/option-chain/StrategyBuilder";
-import { getIndexPrices, getOptionChain } from "@/lib/api";
+import { getIndexPrices, getOptionChain, getExpiryDates, getLotSize, batchLTP, getLiveIndices } from "@/lib/api";
+import { FeedConnection } from "@/lib/ws";
 import type {
     IndexPrice,
     Instrument,
@@ -16,27 +17,27 @@ import type {
     TransactionType,
 } from "@/lib/types";
 
-// ─── Default Expiry Dates (next few Thursdays from today) ───
-function getUpcomingExpiries(): string[] {
-    const expiries: string[] = [];
-    const today = new Date();
-    let d = new Date(today);
+// ─── Market hours check (IST: 9:15 AM - 3:30 PM, Mon-Fri) ───
+function isMarketOpen(): boolean {
+    const now = new Date();
+    const istOffset = 5.5 * 60 * 60 * 1000; // IST is UTC+5:30
+    const istTime = new Date(now.getTime() + istOffset + now.getTimezoneOffset() * 60 * 1000);
+    const day = istTime.getDay();
+    const hours = istTime.getHours();
+    const minutes = istTime.getMinutes();
+    const totalMinutes = hours * 60 + minutes;
 
-    // Find next Thursday
-    while (d.getDay() !== 4) {
-        d.setDate(d.getDate() + 1);
-    }
+    // Weekday check (Mon=1, Fri=5)
+    if (day === 0 || day === 6) return false;
 
-    for (let i = 0; i < 6; i++) {
-        const yyyy = d.getFullYear();
-        const mm = String(d.getMonth() + 1).padStart(2, "0");
-        const dd = String(d.getDate()).padStart(2, "0");
-        expiries.push(`${yyyy}-${mm}-${dd}`);
-        d.setDate(d.getDate() + 7);
-    }
-
-    return expiries;
+    // Market hours: 9:15 AM (555 min) to 3:30 PM (930 min)
+    return totalMinutes >= 555 && totalMinutes <= 930;
 }
+
+// ─── Polling intervals ───
+const INDEX_POLL_INTERVAL = 3000;  // 3 seconds (fallback if WebSocket fails)
+const CHAIN_POLL_INTERVAL = 30000; // 30 seconds for full option chain refresh (Greeks, OI)
+const LTP_POLL_INTERVAL = 2000;    // 2 seconds for fast LTP-only updates
 
 export default function OptionChainPage() {
     // ─── State ───
@@ -44,8 +45,9 @@ export default function OptionChainPage() {
     const [indicesLoading, setIndicesLoading] = useState(true);
     const [currentInstrument, setCurrentInstrument] = useState("NIFTY");
     const [currentExchange, setCurrentExchange] = useState("NSE");
-    const [expiryDates, setExpiryDates] = useState<string[]>(getUpcomingExpiries());
-    const [selectedExpiry, setSelectedExpiry] = useState(expiryDates[0] || "");
+    const [expiryDates, setExpiryDates] = useState<string[]>([]);
+    const [expiryLoading, setExpiryLoading] = useState(true);
+    const [selectedExpiry, setSelectedExpiry] = useState("");
     const [strikes, setStrikes] = useState<StrikeData[]>([]);
     const [underlyingLTP, setUnderlyingLTP] = useState(0);
     const [pcr, setPcr] = useState(0);
@@ -53,37 +55,112 @@ export default function OptionChainPage() {
     const [atmStrike, setAtmStrike] = useState(0);
     const [chainLoading, setChainLoading] = useState(false);
     const [chainError, setChainError] = useState<string | null>(null);
+    const [lastUpdated, setLastUpdated] = useState<Date | null>(null);
+    const [isLive, setIsLive] = useState(false);
 
     // Strategy Builder
     const [strategyLegs, setStrategyLegs] = useState<StrategyLeg[]>([]);
     const [isStrategyOpen, setIsStrategyOpen] = useState(false);
+    const [lotSize, setLotSize] = useState<number>(25); // NIFTY default lot size
 
-    // Track if route is active (for lazy loading)
+    // Track if route is active
     const isActiveRef = useRef(true);
+    const indexPollRef = useRef<NodeJS.Timeout | null>(null);
+    const chainPollRef = useRef<NodeJS.Timeout | null>(null);
+    const ltpPollRef = useRef<NodeJS.Timeout | null>(null);
+    const indexFetchInProgress = useRef(false);
+    const chainFetchInProgress = useRef(false);
+    const feedRef = useRef<FeedConnection | null>(null);
+    const [wsConnected, setWsConnected] = useState(false);
 
     // ─── Lifecycle: Mark route as inactive on unmount ───
     useEffect(() => {
         isActiveRef.current = true;
+
+        // ── Initialize WebSocket Feed Connection ──
+        const feed = new FeedConnection({
+            onIndexUpdate: (feedIndices) => {
+                if (isActiveRef.current) {
+                    setIndices(feedIndices);
+                    setIndicesLoading(false);
+                    setLastUpdated(new Date());
+                    setIsLive(true);
+                }
+            },
+            onLTPUpdate: (ltpData) => {
+                if (isActiveRef.current) {
+                    // Update strike LTPs from feed data
+                    setStrikes((prev) => {
+                        if (prev.length === 0) return prev;
+                        let changed = false;
+                        const updated = prev.map((strike) => {
+                            const newStrike = { ...strike };
+                            if (strike.CE?.trading_symbol) {
+                                const key = `NSE_${strike.CE.trading_symbol}`;
+                                const altKey = `BSE_${strike.CE.trading_symbol}`;
+                                const newLtp = ltpData[key] ?? ltpData[altKey];
+                                if (newLtp !== undefined && newLtp !== strike.CE.ltp) {
+                                    newStrike.CE = { ...strike.CE, ltp: newLtp };
+                                    changed = true;
+                                }
+                            }
+                            if (strike.PE?.trading_symbol) {
+                                const key = `NSE_${strike.PE.trading_symbol}`;
+                                const altKey = `BSE_${strike.PE.trading_symbol}`;
+                                const newLtp = ltpData[key] ?? ltpData[altKey];
+                                if (newLtp !== undefined && newLtp !== strike.PE.ltp) {
+                                    newStrike.PE = { ...strike.PE, ltp: newLtp };
+                                    changed = true;
+                                }
+                            }
+                            return newStrike;
+                        });
+                        return changed ? updated : prev;
+                    });
+                    setLastUpdated(new Date());
+                }
+            },
+            onConnect: () => setWsConnected(true),
+            onDisconnect: () => setWsConnected(false),
+        });
+        feed.connect();
+        feedRef.current = feed;
+
         return () => {
             isActiveRef.current = false;
+            if (indexPollRef.current) clearInterval(indexPollRef.current);
+            if (chainPollRef.current) clearInterval(chainPollRef.current);
+            if (ltpPollRef.current) clearInterval(ltpPollRef.current);
+            feed.destroy();
+            feedRef.current = null;
         };
     }, []);
 
-    // ─── Fetch Index Prices (LAZY — only when this route is active) ───
-    useEffect(() => {
+    // ─── Fetch Index Prices (uses live/feed endpoint for speed) ───
+    const fetchIndices = useCallback(async (isInitial = false) => {
         if (!isActiveRef.current) return;
+        if (indexFetchInProgress.current) return;
+        indexFetchInProgress.current = true;
 
-        async function fetchIndices() {
-            setIndicesLoading(true);
+        if (isInitial) setIndicesLoading(true);
+
+        try {
+            const data = await getLiveIndices();
+            if (isActiveRef.current) {
+                setIndices(data.indices);
+                setLastUpdated(new Date());
+            }
+        } catch (err) {
+            // Fallback to regular endpoint
             try {
                 const data = await getIndexPrices();
                 if (isActiveRef.current) {
                     setIndices(data.indices);
+                    setLastUpdated(new Date());
                 }
-            } catch (err) {
+            } catch {
                 console.error("Failed to fetch indices:", err);
-                // Set mock data as fallback for demo
-                if (isActiveRef.current) {
+                if (isInitial && isActiveRef.current) {
                     setIndices([
                         { symbol: "NIFTY 50", ltp: 22547.55, change: 94.3, change_perc: 0.42 },
                         { symbol: "BANK NIFTY", ltp: 48632.10, change: -124.5, change_perc: -0.26 },
@@ -91,42 +168,158 @@ export default function OptionChainPage() {
                         { symbol: "SENSEX", ltp: 74339.44, change: 312.8, change_perc: 0.42 },
                     ]);
                 }
-            } finally {
-                if (isActiveRef.current) {
-                    setIndicesLoading(false);
+            }
+        } finally {
+            indexFetchInProgress.current = false;
+            if (isInitial && isActiveRef.current) {
+                setIndicesLoading(false);
+            }
+        }
+    }, []);
+
+    // ─── Index Prices Polling ───
+    useEffect(() => {
+        // Fetch once immediately
+        fetchIndices(true).then(() => {
+            // Only start polling AFTER initial fetch completes
+            if (isActiveRef.current) {
+                if (indexPollRef.current) clearInterval(indexPollRef.current);
+                indexPollRef.current = setInterval(() => {
+                    fetchIndices(false);
+                }, INDEX_POLL_INTERVAL);
+                setIsLive(true);
+            }
+        });
+
+        return () => {
+            if (indexPollRef.current) clearInterval(indexPollRef.current);
+        };
+    }, [fetchIndices]);
+
+    // ─── Fetch Expiry Dates from Backend ───
+    useEffect(() => {
+        async function loadExpiries() {
+            setExpiryLoading(true);
+            try {
+                const data = await getExpiryDates(currentInstrument, currentExchange);
+                if (isActiveRef.current && data.expiry_dates.length > 0) {
+                    setExpiryDates(data.expiry_dates);
+                    setSelectedExpiry(data.expiry_dates[0]);
+                } else if (isActiveRef.current) {
+                    // Fallback: generate next few weekdays as candidates
+                    const fallback = generateFallbackExpiries();
+                    setExpiryDates(fallback);
+                    setSelectedExpiry(fallback[0] || "");
                 }
+            } catch (err) {
+                console.error("Failed to fetch expiry dates:", err);
+                if (isActiveRef.current) {
+                    const fallback = generateFallbackExpiries();
+                    setExpiryDates(fallback);
+                    setSelectedExpiry(fallback[0] || "");
+                }
+            } finally {
+                if (isActiveRef.current) setExpiryLoading(false);
             }
         }
 
-        fetchIndices();
-    }, []);
+        loadExpiries();
+    }, [currentInstrument, currentExchange]);
 
-    // ─── Fetch Option Chain (LAZY — only when instrument or expiry changes) ───
+    // ─── Fetch Lot Size ───
+    useEffect(() => {
+        async function loadLotSize() {
+            try {
+                const data = await getLotSize(currentInstrument);
+                if (isActiveRef.current && data.lot_size) {
+                    setLotSize(data.lot_size);
+                }
+            } catch (err) {
+                console.error("Failed to fetch lot size:", err);
+                // Fallback defaults
+                const defaults: Record<string, number> = {
+                    NIFTY: 25, BANKNIFTY: 15, "NIFTY BANK": 15,
+                    FINNIFTY: 25, "NIFTY FIN SERVICE": 25,
+                    SENSEX: 10, BANKEX: 15,
+                };
+                setLotSize(defaults[currentInstrument] || 1);
+            }
+        }
+        loadLotSize();
+    }, [currentInstrument]);
+
+    // Fallback expiry date generator
+    function generateFallbackExpiries(): string[] {
+        const expiries: string[] = [];
+        const today = new Date();
+        let d = new Date(today);
+        // Just generate next 8 weekdays as candidates
+        let count = 0;
+        while (count < 8) {
+            d.setDate(d.getDate() + 1);
+            if (d.getDay() !== 0 && d.getDay() !== 6) {
+                const yyyy = d.getFullYear();
+                const mm = String(d.getMonth() + 1).padStart(2, "0");
+                const dd = String(d.getDate()).padStart(2, "0");
+                expiries.push(`${yyyy}-${mm}-${dd}`);
+                count++;
+            }
+        }
+        return expiries;
+    }
+
+    // ─── Fetch Option Chain ───
     const fetchOptionChain = useCallback(
-        async (symbol: string, expiry: string, exchange: string) => {
-            if (!isActiveRef.current) return;
+        async (symbol: string, expiry: string, exchange: string, isInitial = false) => {
+            if (!isActiveRef.current || !expiry) return;
+            if (chainFetchInProgress.current && !isInitial) return; // Skip polling if fetch in progress
+            chainFetchInProgress.current = true;
 
-            setChainLoading(true);
-            setChainError(null);
+            if (isInitial) {
+                setChainLoading(true);
+                setChainError(null);
+            }
 
             try {
                 const data = await getOptionChain(symbol, expiry, exchange);
                 if (isActiveRef.current) {
-                    setStrikes(data.strikes);
-                    setUnderlyingLTP(data.underlying_ltp);
-                    setPcr(data.pcr);
-                    setMaxPain(data.max_pain);
-                    setAtmStrike(data.atm_strike);
+                    if (data.strikes && data.strikes.length > 0) {
+                        setStrikes(data.strikes);
+                        setUnderlyingLTP(data.underlying_ltp);
+                        setPcr(data.pcr);
+                        setMaxPain(data.max_pain);
+                        setAtmStrike(data.atm_strike);
+                        setChainError(null);
+                        setLastUpdated(new Date());
+
+                        // Update lot size from API response
+                        if (data.lot_size && data.lot_size > 0) {
+                            setLotSize(data.lot_size);
+                        }
+
+                        // Subscribe to LTP updates via WebSocket
+                        const tradingSymbols: string[] = [];
+                        data.strikes.forEach((s) => {
+                            if (s.CE?.trading_symbol) tradingSymbols.push(s.CE.trading_symbol);
+                            if (s.PE?.trading_symbol) tradingSymbols.push(s.PE.trading_symbol);
+                        });
+                        if (feedRef.current && tradingSymbols.length > 0) {
+                            feedRef.current.subscribeOptions(tradingSymbols, exchange);
+                        }
+                    } else if (isInitial) {
+                        setChainError(`No option data available for expiry ${expiry}. Try a different expiry date.`);
+                        setStrikes([]);
+                    }
                 }
             } catch (err: any) {
                 console.error("Failed to fetch option chain:", err);
-                if (isActiveRef.current) {
+                if (isInitial && isActiveRef.current) {
                     setChainError(err.message || "Failed to load option chain");
-                    // Generate mock data for demo
-                    generateMockData(symbol);
+                    setStrikes([]);
                 }
             } finally {
-                if (isActiveRef.current) {
+                chainFetchInProgress.current = false;
+                if (isInitial && isActiveRef.current) {
                     setChainLoading(false);
                 }
             }
@@ -134,99 +327,23 @@ export default function OptionChainPage() {
         []
     );
 
-    // Generate mock data for demo/offline mode
-    function generateMockData(symbol: string) {
-        const basePrice = symbol === "NIFTY" ? 22550 :
-            symbol === "BANKNIFTY" || symbol === "NIFTY BANK" ? 48650 :
-                symbol === "SENSEX" ? 74340 :
-                    symbol === "FINNIFTY" || symbol === "NIFTY FIN SERVICE" ? 21850 :
-                        2500; // stock default
-
-        const step = symbol === "NIFTY" || symbol === "FINNIFTY" || symbol === "NIFTY FIN SERVICE" ? 50 :
-            symbol === "BANKNIFTY" || symbol === "NIFTY BANK" ? 100 :
-                symbol === "SENSEX" ? 100 : 50;
-
-        const numStrikes = 40;
-        const halfStrikes = numStrikes / 2;
-        const mockStrikes: StrikeData[] = [];
-        let totalCallOI = 0;
-        let totalPutOI = 0;
-
-        for (let i = -halfStrikes; i <= halfStrikes; i++) {
-            const strikePrice = Math.round((basePrice + i * step) / step) * step;
-            const distance = Math.abs(strikePrice - basePrice);
-            const distanceFactor = Math.max(0, 1 - distance / (halfStrikes * step));
-
-            const callOI = Math.floor(Math.random() * 50000 * distanceFactor + 100);
-            const putOI = Math.floor(Math.random() * 50000 * distanceFactor + 100);
-            totalCallOI += callOI;
-            totalPutOI += putOI;
-
-            const callIV = 10 + Math.random() * 20 + distance / 200;
-            const putIV = 10 + Math.random() * 20 + distance / 200;
-
-            const callDelta = Math.max(0, Math.min(1, 0.5 + (basePrice - strikePrice) / (basePrice * 0.05)));
-            const putDelta = callDelta - 1;
-
-            const callLTP = Math.max(0.05, (basePrice - strikePrice) + distanceFactor * 200 * Math.random());
-            const putLTP = Math.max(0.05, (strikePrice - basePrice) + distanceFactor * 200 * Math.random());
-
-            mockStrikes.push({
-                strike_price: strikePrice,
-                CE: {
-                    trading_symbol: `${symbol}CE${strikePrice}`,
-                    ltp: Math.round(callLTP * 100) / 100,
-                    open_interest: callOI,
-                    volume: Math.floor(Math.random() * 20000),
-                    greeks: {
-                        delta: Math.round(callDelta * 10000) / 10000,
-                        gamma: Math.round(Math.random() * 0.005 * 10000) / 10000,
-                        theta: -Math.round(Math.random() * 15 * 10000) / 10000,
-                        vega: Math.round(Math.random() * 20 * 10000) / 10000,
-                        rho: Math.round(Math.random() * 5 * 10000) / 10000,
-                        iv: Math.round(callIV * 100) / 100,
-                    },
-                },
-                PE: {
-                    trading_symbol: `${symbol}PE${strikePrice}`,
-                    ltp: Math.round(putLTP * 100) / 100,
-                    open_interest: putOI,
-                    volume: Math.floor(Math.random() * 20000),
-                    greeks: {
-                        delta: Math.round(putDelta * 10000) / 10000,
-                        gamma: Math.round(Math.random() * 0.005 * 10000) / 10000,
-                        theta: -Math.round(Math.random() * 15 * 10000) / 10000,
-                        vega: Math.round(Math.random() * 20 * 10000) / 10000,
-                        rho: -Math.round(Math.random() * 5 * 10000) / 10000,
-                        iv: Math.round(putIV * 100) / 100,
-                    },
-                },
+    // ─── Option Chain Polling ───
+    useEffect(() => {
+        if (currentInstrument && selectedExpiry) {
+            // Initial fetch, then start polling AFTER it completes
+            fetchOptionChain(currentInstrument, selectedExpiry, currentExchange, true).then(() => {
+                if (isActiveRef.current && currentInstrument && selectedExpiry) {
+                    if (chainPollRef.current) clearInterval(chainPollRef.current);
+                    chainPollRef.current = setInterval(() => {
+                        fetchOptionChain(currentInstrument, selectedExpiry, currentExchange, false);
+                    }, CHAIN_POLL_INTERVAL);
+                }
             });
         }
 
-        // Sort by strike
-        mockStrikes.sort((a, b) => a.strike_price - b.strike_price);
-
-        // Find ATM
-        const atm = mockStrikes.reduce((prev, curr) =>
-            Math.abs(curr.strike_price - basePrice) < Math.abs(prev.strike_price - basePrice) ? curr : prev
-        ).strike_price;
-
-        // Simple max pain
-        const maxPainStrike = mockStrikes[Math.floor(mockStrikes.length / 2)].strike_price;
-
-        setStrikes(mockStrikes);
-        setUnderlyingLTP(basePrice);
-        setPcr(totalCallOI > 0 ? totalPutOI / totalCallOI : 0);
-        setMaxPain(maxPainStrike);
-        setAtmStrike(atm);
-    }
-
-    // ─── Load chain when instrument or expiry changes ───
-    useEffect(() => {
-        if (currentInstrument && selectedExpiry) {
-            fetchOptionChain(currentInstrument, selectedExpiry, currentExchange);
-        }
+        return () => {
+            if (chainPollRef.current) clearInterval(chainPollRef.current);
+        };
     }, [currentInstrument, selectedExpiry, currentExchange, fetchOptionChain]);
 
     // ─── Instrument Selection ───
@@ -235,6 +352,8 @@ export default function OptionChainPage() {
         setCurrentExchange(inst.exchange);
         setStrikes([]);
         setStrategyLegs([]);
+        setExpiryDates([]);
+        setSelectedExpiry("");
     };
 
     // ─── Expiry Change ───
@@ -312,10 +431,33 @@ export default function OptionChainPage() {
                 onExpiryChange={handleExpiryChange}
                 totalStrikes={strikes.length}
                 loading={chainLoading}
+                instrumentName={currentInstrument}
+                lotSize={lotSize}
             />
 
             {/* Main content: Option Chain Table + Strategy Builder */}
             <div className="flex-1 flex overflow-hidden">
+                {/* Live indicator + last updated */}
+                {isLive && lastUpdated && !chainLoading && (
+                    <motion.div
+                        initial={{ opacity: 0, y: -10 }}
+                        animate={{ opacity: 1, y: 0 }}
+                        className="absolute top-0 right-4 z-30 px-3 py-1 text-[9px] font-medium flex items-center gap-1.5"
+                        style={{
+                            color: "rgba(0, 255, 136, 0.8)",
+                        }}
+                    >
+                        <span
+                            className="inline-block w-1.5 h-1.5 rounded-full animate-pulse"
+                            style={{ background: "#00FF88" }}
+                        />
+                        LIVE
+                        <span style={{ color: "rgba(255,255,255,0.3)" }}>
+                            {lastUpdated.toLocaleTimeString()}
+                        </span>
+                    </motion.div>
+                )}
+
                 {/* Error banner */}
                 {chainError && !chainLoading && (
                     <motion.div
@@ -328,7 +470,23 @@ export default function OptionChainPage() {
                             borderBottom: "1px solid rgba(255, 179, 0, 0.2)",
                         }}
                     >
-                        ⚠ Using demo data — {chainError}. Configure your API token in backend/.env
+                        ⚠ {chainError.includes("demo") ? `Using demo data — ${chainError}` : chainError}
+                    </motion.div>
+                )}
+
+                {/* Expiry loading indicator */}
+                {expiryLoading && (
+                    <motion.div
+                        initial={{ opacity: 0 }}
+                        animate={{ opacity: 1 }}
+                        className="absolute top-0 left-0 right-0 z-30 px-6 py-2 text-center text-[10px] font-medium"
+                        style={{
+                            background: "rgba(0, 200, 255, 0.05)",
+                            color: "rgba(0, 200, 255, 0.6)",
+                            borderBottom: "1px solid rgba(0, 200, 255, 0.1)",
+                        }}
+                    >
+                        Discovering valid expiry dates...
                     </motion.div>
                 )}
 
@@ -352,6 +510,8 @@ export default function OptionChainPage() {
                     onRemoveLeg={handleRemoveLeg}
                     onClearAll={handleClearAll}
                     underlyingLTP={underlyingLTP}
+                    lotSize={lotSize}
+                    instrumentName={currentInstrument}
                 />
             </div>
         </div>

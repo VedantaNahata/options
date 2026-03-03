@@ -1,19 +1,125 @@
 "use client";
 
-import { useState, useEffect, useCallback, useRef } from "react";
+import { useState, useEffect, useRef } from "react";
 import { motion, AnimatePresence } from "framer-motion";
 import {
     Search,
     TrendingUp,
     TrendingDown,
     Minus,
-    ChevronDown,
     X,
 } from "lucide-react";
 import { Input } from "@/components/ui/input";
 import { Badge } from "@/components/ui/badge";
-import { searchInstruments } from "@/lib/api";
 import type { Instrument, IndexPrice } from "@/lib/types";
+
+// ─── Local instrument list for instant search (no API call needed) ───
+const ALL_INSTRUMENTS: Instrument[] = [
+    // ── Indices ──
+    { symbol: "NIFTY", name: "Nifty 50", exchange: "NSE", type: "INDEX" },
+    { symbol: "BANKNIFTY", name: "Bank Nifty", exchange: "NSE", type: "INDEX" },
+    { symbol: "FINNIFTY", name: "Fin Nifty", exchange: "NSE", type: "INDEX" },
+    { symbol: "MIDCPNIFTY", name: "Midcap Nifty", exchange: "NSE", type: "INDEX" },
+    { symbol: "SENSEX", name: "Sensex", exchange: "BSE", type: "INDEX" },
+    { symbol: "BANKEX", name: "Bankex", exchange: "BSE", type: "INDEX" },
+    // ── F&O Stocks ──
+    { symbol: "RELIANCE", name: "Reliance Industries", exchange: "NSE", type: "STOCK" },
+    { symbol: "TCS", name: "Tata Consultancy Services", exchange: "NSE", type: "STOCK" },
+    { symbol: "INFY", name: "Infosys", exchange: "NSE", type: "STOCK" },
+    { symbol: "HDFCBANK", name: "HDFC Bank", exchange: "NSE", type: "STOCK" },
+    { symbol: "ICICIBANK", name: "ICICI Bank", exchange: "NSE", type: "STOCK" },
+    { symbol: "SBIN", name: "State Bank of India", exchange: "NSE", type: "STOCK" },
+    { symbol: "BHARTIARTL", name: "Bharti Airtel", exchange: "NSE", type: "STOCK" },
+    { symbol: "ITC", name: "ITC Limited", exchange: "NSE", type: "STOCK" },
+    { symbol: "KOTAKBANK", name: "Kotak Mahindra Bank", exchange: "NSE", type: "STOCK" },
+    { symbol: "LT", name: "Larsen & Toubro", exchange: "NSE", type: "STOCK" },
+    { symbol: "HINDUNILVR", name: "Hindustan Unilever", exchange: "NSE", type: "STOCK" },
+    { symbol: "BAJFINANCE", name: "Bajaj Finance", exchange: "NSE", type: "STOCK" },
+    { symbol: "MARUTI", name: "Maruti Suzuki", exchange: "NSE", type: "STOCK" },
+    { symbol: "TATAMOTORS", name: "Tata Motors", exchange: "NSE", type: "STOCK" },
+    { symbol: "TATASTEEL", name: "Tata Steel", exchange: "NSE", type: "STOCK" },
+    { symbol: "AXISBANK", name: "Axis Bank", exchange: "NSE", type: "STOCK" },
+    { symbol: "WIPRO", name: "Wipro", exchange: "NSE", type: "STOCK" },
+    { symbol: "ADANIENT", name: "Adani Enterprises", exchange: "NSE", type: "STOCK" },
+    { symbol: "SUNPHARMA", name: "Sun Pharmaceutical", exchange: "NSE", type: "STOCK" },
+    { symbol: "HCLTECH", name: "HCL Technologies", exchange: "NSE", type: "STOCK" },
+    { symbol: "POWERGRID", name: "Power Grid Corporation", exchange: "NSE", type: "STOCK" },
+    { symbol: "NTPC", name: "NTPC Limited", exchange: "NSE", type: "STOCK" },
+    { symbol: "ONGC", name: "Oil & Natural Gas Corp", exchange: "NSE", type: "STOCK" },
+    { symbol: "COALINDIA", name: "Coal India", exchange: "NSE", type: "STOCK" },
+    { symbol: "JSWSTEEL", name: "JSW Steel", exchange: "NSE", type: "STOCK" },
+    { symbol: "M&M", name: "Mahindra & Mahindra", exchange: "NSE", type: "STOCK" },
+    { symbol: "TECHM", name: "Tech Mahindra", exchange: "NSE", type: "STOCK" },
+    { symbol: "ASIANPAINT", name: "Asian Paints", exchange: "NSE", type: "STOCK" },
+    { symbol: "BAJAJFINSV", name: "Bajaj Finserv", exchange: "NSE", type: "STOCK" },
+    { symbol: "TITAN", name: "Titan Company", exchange: "NSE", type: "STOCK" },
+    { symbol: "NESTLEIND", name: "Nestle India", exchange: "NSE", type: "STOCK" },
+    { symbol: "ULTRACEMCO", name: "UltraTech Cement", exchange: "NSE", type: "STOCK" },
+    { symbol: "DRREDDY", name: "Dr. Reddy's Labs", exchange: "NSE", type: "STOCK" },
+    { symbol: "CIPLA", name: "Cipla", exchange: "NSE", type: "STOCK" },
+    { symbol: "DIVISLAB", name: "Divi's Laboratories", exchange: "NSE", type: "STOCK" },
+    { symbol: "APOLLOHOSP", name: "Apollo Hospitals", exchange: "NSE", type: "STOCK" },
+    { symbol: "EICHERMOT", name: "Eicher Motors", exchange: "NSE", type: "STOCK" },
+    { symbol: "HEROMOTOCO", name: "Hero MotoCorp", exchange: "NSE", type: "STOCK" },
+    { symbol: "BAJAJ-AUTO", name: "Bajaj Auto", exchange: "NSE", type: "STOCK" },
+    { symbol: "TRENT", name: "Trent Limited", exchange: "NSE", type: "STOCK" },
+    { symbol: "SHRIRAMFIN", name: "Shriram Finance", exchange: "NSE", type: "STOCK" },
+    { symbol: "BEL", name: "Bharat Electronics", exchange: "NSE", type: "STOCK" },
+    { symbol: "HAL", name: "Hindustan Aeronautics", exchange: "NSE", type: "STOCK" },
+    { symbol: "TATACONSUM", name: "Tata Consumer Products", exchange: "NSE", type: "STOCK" },
+    { symbol: "GRASIM", name: "Grasim Industries", exchange: "NSE", type: "STOCK" },
+    { symbol: "INDUSINDBK", name: "IndusInd Bank", exchange: "NSE", type: "STOCK" },
+    { symbol: "ADANIPORTS", name: "Adani Ports", exchange: "NSE", type: "STOCK" },
+    { symbol: "HINDALCO", name: "Hindalco Industries", exchange: "NSE", type: "STOCK" },
+    { symbol: "BPCL", name: "Bharat Petroleum", exchange: "NSE", type: "STOCK" },
+    { symbol: "IOC", name: "Indian Oil Corporation", exchange: "NSE", type: "STOCK" },
+    { symbol: "VEDL", name: "Vedanta Limited", exchange: "NSE", type: "STOCK" },
+    { symbol: "TATAPOWER", name: "Tata Power", exchange: "NSE", type: "STOCK" },
+    { symbol: "PNB", name: "Punjab National Bank", exchange: "NSE", type: "STOCK" },
+    { symbol: "BANKBARODA", name: "Bank of Baroda", exchange: "NSE", type: "STOCK" },
+    { symbol: "CANBK", name: "Canara Bank", exchange: "NSE", type: "STOCK" },
+    { symbol: "FEDERALBNK", name: "Federal Bank", exchange: "NSE", type: "STOCK" },
+    { symbol: "IDFCFIRSTB", name: "IDFC First Bank", exchange: "NSE", type: "STOCK" },
+    { symbol: "DLF", name: "DLF Limited", exchange: "NSE", type: "STOCK" },
+    { symbol: "GODREJCP", name: "Godrej Consumer Products", exchange: "NSE", type: "STOCK" },
+    { symbol: "DABUR", name: "Dabur India", exchange: "NSE", type: "STOCK" },
+    { symbol: "PIDILITIND", name: "Pidilite Industries", exchange: "NSE", type: "STOCK" },
+    { symbol: "HAVELLS", name: "Havells India", exchange: "NSE", type: "STOCK" },
+    { symbol: "SIEMENS", name: "Siemens", exchange: "NSE", type: "STOCK" },
+    { symbol: "ABB", name: "ABB India", exchange: "NSE", type: "STOCK" },
+    { symbol: "AMBUJACEM", name: "Ambuja Cements", exchange: "NSE", type: "STOCK" },
+    { symbol: "SHREECEM", name: "Shree Cement", exchange: "NSE", type: "STOCK" },
+    { symbol: "ACC", name: "ACC Limited", exchange: "NSE", type: "STOCK" },
+    { symbol: "INDUSTOWER", name: "Indus Towers", exchange: "NSE", type: "STOCK" },
+    { symbol: "ZOMATO", name: "Zomato", exchange: "NSE", type: "STOCK" },
+    { symbol: "PAYTM", name: "One97 Communications", exchange: "NSE", type: "STOCK" },
+    { symbol: "NYKAA", name: "FSN E-Commerce (Nykaa)", exchange: "NSE", type: "STOCK" },
+    { symbol: "DMART", name: "Avenue Supermarts (DMart)", exchange: "NSE", type: "STOCK" },
+    { symbol: "LTIM", name: "LTIMindtree", exchange: "NSE", type: "STOCK" },
+    { symbol: "PERSISTENT", name: "Persistent Systems", exchange: "NSE", type: "STOCK" },
+    { symbol: "COFORGE", name: "Coforge", exchange: "NSE", type: "STOCK" },
+    { symbol: "MPHASIS", name: "Mphasis", exchange: "NSE", type: "STOCK" },
+    { symbol: "IDEA", name: "Vodafone Idea", exchange: "NSE", type: "STOCK" },
+    { symbol: "SAIL", name: "Steel Authority of India", exchange: "NSE", type: "STOCK" },
+    { symbol: "NMDC", name: "NMDC Limited", exchange: "NSE", type: "STOCK" },
+    { symbol: "BHEL", name: "Bharat Heavy Electricals", exchange: "NSE", type: "STOCK" },
+    { symbol: "RECLTD", name: "REC Limited", exchange: "NSE", type: "STOCK" },
+    { symbol: "PFC", name: "Power Finance Corporation", exchange: "NSE", type: "STOCK" },
+    { symbol: "IRFC", name: "Indian Railway Finance", exchange: "NSE", type: "STOCK" },
+    { symbol: "IRCTC", name: "IRCTC", exchange: "NSE", type: "STOCK" },
+    { symbol: "LTF", name: "L&T Finance", exchange: "NSE", type: "STOCK" },
+    { symbol: "CHOLAFIN", name: "Cholamandalam Inv & Fin", exchange: "NSE", type: "STOCK" },
+    { symbol: "MUTHOOTFIN", name: "Muthoot Finance", exchange: "NSE", type: "STOCK" },
+    { symbol: "MANAPPURAM", name: "Manappuram Finance", exchange: "NSE", type: "STOCK" },
+    { symbol: "VOLTAS", name: "Voltas", exchange: "NSE", type: "STOCK" },
+    { symbol: "DIXON", name: "Dixon Technologies", exchange: "NSE", type: "STOCK" },
+    { symbol: "POLYCAB", name: "Polycab India", exchange: "NSE", type: "STOCK" },
+    { symbol: "PAGEIND", name: "Page Industries", exchange: "NSE", type: "STOCK" },
+    { symbol: "MFSL", name: "Max Financial Services", exchange: "NSE", type: "STOCK" },
+    { symbol: "SBILIFE", name: "SBI Life Insurance", exchange: "NSE", type: "STOCK" },
+    { symbol: "HDFCLIFE", name: "HDFC Life Insurance", exchange: "NSE", type: "STOCK" },
+    { symbol: "ICICIPRULI", name: "ICICI Prudential Life", exchange: "NSE", type: "STOCK" },
+];
 
 interface TopBarProps {
     indices: IndexPrice[];
@@ -31,9 +137,7 @@ export function TopBar({
     const [searchQuery, setSearchQuery] = useState("");
     const [searchResults, setSearchResults] = useState<Instrument[]>([]);
     const [isSearchOpen, setIsSearchOpen] = useState(false);
-    const [isSearching, setIsSearching] = useState(false);
     const searchRef = useRef<HTMLDivElement>(null);
-    const debounceRef = useRef<NodeJS.Timeout | null>(null);
 
     // Close dropdown on outside click
     useEffect(() => {
@@ -46,32 +150,23 @@ export function TopBar({
         return () => document.removeEventListener("mousedown", handleClick);
     }, []);
 
-    const handleSearch = useCallback(
-        (query: string) => {
-            setSearchQuery(query);
-            if (debounceRef.current) clearTimeout(debounceRef.current);
-
-            if (query.length < 1) {
-                setSearchResults([]);
-                setIsSearchOpen(false);
-                return;
-            }
-
-            setIsSearching(true);
-            debounceRef.current = setTimeout(async () => {
-                try {
-                    const data = await searchInstruments(query);
-                    setSearchResults(data.results);
-                    setIsSearchOpen(true);
-                } catch {
-                    setSearchResults([]);
-                } finally {
-                    setIsSearching(false);
-                }
-            }, 250);
-        },
-        []
-    );
+    // Instant client-side search — no API call, no debounce needed
+    const handleSearch = (query: string) => {
+        setSearchQuery(query);
+        if (query.length < 1) {
+            setSearchResults([]);
+            setIsSearchOpen(false);
+            return;
+        }
+        const q = query.toUpperCase();
+        const results = ALL_INSTRUMENTS.filter(
+            (inst) =>
+                inst.symbol.toUpperCase().includes(q) ||
+                inst.name.toUpperCase().includes(q)
+        ).slice(0, 15);
+        setSearchResults(results);
+        setIsSearchOpen(true);
+    };
 
     const handleSelect = (inst: Instrument) => {
         onSelectInstrument(inst);
@@ -192,11 +287,7 @@ export function TopBar({
                                 className="absolute top-full left-0 right-0 mt-1.5 z-50 glass rounded-xl overflow-hidden shadow-2xl"
                                 style={{ maxHeight: "320px" }}
                             >
-                                {isSearching ? (
-                                    <div className="p-4 text-center text-xs" style={{ color: "var(--muted-foreground)" }}>
-                                        Searching...
-                                    </div>
-                                ) : searchResults.length === 0 ? (
+                                {searchResults.length === 0 ? (
                                     <div className="p-4 text-center text-xs" style={{ color: "var(--muted-foreground)" }}>
                                         No instruments found
                                     </div>

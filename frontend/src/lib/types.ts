@@ -19,6 +19,10 @@ export interface Greeks {
 export interface OptionLeg {
     trading_symbol: string;
     ltp: number;
+    bid?: number | null;
+    ask?: number | null;
+    change_perc?: number | null;
+    oi_change?: number | null;
     open_interest: number;
     volume: number;
     greeks: Greeks;
@@ -38,6 +42,7 @@ export interface OptionChainData {
     max_pain: number;
     atm_strike: number;
     total_strikes: number;
+    lot_size: number;
 }
 
 export interface Instrument {

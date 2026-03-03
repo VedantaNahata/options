@@ -1,8 +1,7 @@
 /**
  * OptiX API Client
  * ================
- * All API calls are LAZY — they only fire when explicitly invoked.
- * No polling, no background fetches, no startup calls.
+ * API calls with support for real-time polling.
  */
 
 const API_BASE = process.env.NEXT_PUBLIC_API_URL || "http://localhost:8000";
@@ -44,6 +43,17 @@ export async function getOptionChain(
     );
 }
 
+/* ─── Expiry Dates (fetched from backend, auto-discovered) ─── */
+export async function getExpiryDates(
+    underlying: string = "NIFTY",
+    exchange: string = "NSE"
+) {
+    const params = new URLSearchParams({ underlying, exchange });
+    return fetchAPI<{ expiry_dates: string[]; underlying: string }>(
+        `/api/expiry-dates?${params.toString()}`
+    );
+}
+
 /* ─── Quote ─── */
 export async function getQuote(
     symbol: string,
@@ -65,10 +75,35 @@ export async function getLTP(symbols: string[], segment: string = "CASH") {
     return fetchAPI<Record<string, number>>(`/api/ltp?${params.toString()}`);
 }
 
+/* ─── Lot Size ─── */
+export async function getLotSize(underlying: string) {
+    const params = new URLSearchParams({ underlying });
+    return fetchAPI<{ underlying: string; lot_size: number }>(
+        `/api/lot-size?${params.toString()}`
+    );
+}
+
 /* ─── Instrument Search ─── */
 export async function searchInstruments(query: string) {
     const params = new URLSearchParams({ q: query });
     return fetchAPI<{ results: import("./types").Instrument[] }>(
         `/api/instruments/search?${params.toString()}`
     );
+}
+
+/* ─── Batch LTP (fast option chain price refresh) ─── */
+export async function batchLTP(
+    symbols: string[],
+    exchange: string = "NSE",
+    segment: string = "FNO"
+) {
+    return fetchAPI<{ ltps: Record<string, number> }>("/api/batch-ltp", {
+        method: "POST",
+        body: JSON.stringify({ symbols, exchange, segment }),
+    });
+}
+
+/* ─── Live Index Prices (feed-backed, near-instant) ─── */
+export async function getLiveIndices() {
+    return fetchAPI<{ indices: import("./types").IndexPrice[] }>("/api/live/indices");
 }

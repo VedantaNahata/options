@@ -7,10 +7,11 @@ import {
     Minus,
     ArrowUpDown,
     Trash2,
+    TrendingUp,
 } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Badge } from "@/components/ui/badge";
-import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
+import { Card, CardContent } from "@/components/ui/card";
 import { Separator } from "@/components/ui/separator";
 import {
     Select,
@@ -29,6 +30,8 @@ interface StrategyBuilderProps {
     onRemoveLeg: (id: string) => void;
     onClearAll: () => void;
     underlyingLTP: number;
+    lotSize: number;
+    instrumentName: string;
 }
 
 function formatINR(n: number): string {
@@ -46,11 +49,13 @@ export function StrategyBuilder({
     onRemoveLeg,
     onClearAll,
     underlyingLTP,
+    lotSize,
+    instrumentName,
 }: StrategyBuilderProps) {
-    // Calculate totals
+    // Calculate totals (premium is per unit, multiply by lots × lotSize)
     const totalPremium = legs.reduce((sum, leg) => {
         const mult = leg.transaction_type === "BUY" ? -1 : 1;
-        return sum + leg.ltp * leg.lots * mult;
+        return sum + leg.ltp * leg.lots * lotSize * mult;
     }, 0);
 
     const totalDelta = legs.reduce((sum, leg) => {
@@ -99,6 +104,30 @@ export function StrategyBuilder({
                             </button>
                         </div>
 
+                        {/* Underlying info banner */}
+                        <div className="px-5 py-2.5 border-b flex items-center justify-between"
+                            style={{ borderColor: "var(--border)", background: "rgba(108, 92, 231, 0.04)" }}>
+                            <div className="flex flex-col gap-0.5">
+                                <div className="flex items-center gap-2">
+                                    <TrendingUp size={11} style={{ color: "#6C5CE7" }} />
+                                    <span className="text-xs font-bold text-white">
+                                        {instrumentName}
+                                    </span>
+                                    <span className="text-xs font-bold text-[#a29bfe]">
+                                        ₹{formatINR(underlyingLTP)}
+                                    </span>
+                                </div>
+                                <div className="flex items-center gap-3">
+                                    <span className="text-[10px] font-medium" style={{ color: "var(--muted-foreground)" }}>
+                                        Lot Size
+                                    </span>
+                                    <span className="text-[10px] font-bold text-[#a29bfe]">
+                                        1 Lot = {lotSize.toLocaleString()} units
+                                    </span>
+                                </div>
+                            </div>
+                        </div>
+
                         {/* Legs */}
                         <div className="flex-1 overflow-y-auto px-4 py-3 space-y-2">
                             {legs.length === 0 ? (
@@ -114,7 +143,7 @@ export function StrategyBuilder({
                                 </div>
                             ) : (
                                 <AnimatePresence mode="popLayout">
-                                    {legs.map((leg, i) => (
+                                    {legs.map((leg) => (
                                         <motion.div
                                             key={leg.id}
                                             initial={{ opacity: 0, x: 20, scale: 0.95 }}
@@ -172,6 +201,15 @@ export function StrategyBuilder({
                                                         </button>
                                                     </div>
 
+                                                    {/* Instrument name */}
+                                                    {leg.trading_symbol && (
+                                                        <div className="px-1 -mt-0.5">
+                                                            <span className="text-[9px] font-mono font-medium tracking-wide" style={{ color: "var(--muted-foreground)" }}>
+                                                                {leg.trading_symbol}
+                                                            </span>
+                                                        </div>
+                                                    )}
+
                                                     {/* Controls row */}
                                                     <div className="flex items-center gap-2">
                                                         <Select
@@ -211,6 +249,17 @@ export function StrategyBuilder({
                                                                 lots
                                                             </span>
                                                         </div>
+                                                    </div>
+
+                                                    {/* Quantity display */}
+                                                    <div className="flex items-center justify-between px-2 py-1.5 rounded-lg"
+                                                        style={{ background: "rgba(108, 92, 231, 0.06)" }}>
+                                                        <span className="text-[9px]" style={{ color: "var(--muted-foreground)" }}>
+                                                            Qty ({leg.lots} × {lotSize})
+                                                        </span>
+                                                        <span className="text-[10px] font-bold text-[#a29bfe]">
+                                                            {(leg.lots * lotSize).toLocaleString()} units
+                                                        </span>
                                                     </div>
 
                                                     {/* Price & greeks */}
