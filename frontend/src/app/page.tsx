@@ -401,7 +401,6 @@ export default function LandingPage() {
               { label: "Option Chain", href: "/option-chain" },
               { label: "Strategy Lab", href: "#" },
               { label: "Analytics", href: "#" },
-              { label: "Docs", href: "#" },
             ].map((item) => (
               <Link
                 key={item.label}
@@ -443,7 +442,7 @@ export default function LandingPage() {
               transition={{ duration: 2, repeat: Infinity }}
             />
             <span className="text-[11px] font-normal tracking-wide text-[#A78BFA]">
-              Live Market Data — Powered by Groww API
+              Data. Strategy. Edge.
             </span>
           </motion.div>
 

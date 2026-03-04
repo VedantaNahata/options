@@ -38,13 +38,26 @@ logger = logging.getLogger("optix")
 # ── Groww API Setup ──
 _cached_access_token: Optional[str] = None
 _cached_groww_client: Any = None
+_token_lock = threading.Lock()
 
 
-def _get_access_token() -> str:
-    """Generate or retrieve a cached Groww API access token."""
+def _get_access_token(force_refresh: bool = False) -> str:
+    """Generate or retrieve a cached Groww API access token.
+    
+    When force_refresh=True, re-reads .env and re-authenticates regardless
+    of any cached token.  This is triggered automatically when an API call
+    fails with an auth/token error.
+    """
     global _cached_access_token
-    if _cached_access_token:
+
+    if _cached_access_token and not force_refresh:
         return _cached_access_token
+
+    if force_refresh:
+        logger.info("Force-refreshing access token (re-reading .env) ...")
+        _cached_access_token = None
+        # Re-read .env so the user can drop new keys without restarting
+        load_dotenv(override=True)
 
     from growwapi import GrowwAPI
 
@@ -100,15 +113,40 @@ def _get_access_token() -> str:
     )
 
 
-def get_groww_client():
-    """Returns the globally initialized GrowwAPI client."""
+def _invalidate_groww_client():
+    """Clear cached client and token so the next call re-authenticates."""
+    global _cached_access_token, _cached_groww_client
+    with _token_lock:
+        _cached_access_token = None
+        _cached_groww_client = None
+    logger.info("Groww client cache invalidated — will re-auth on next request")
+
+
+def get_groww_client(force_refresh: bool = False):
+    """Returns the globally initialized GrowwAPI client.
+    
+    If force_refresh=True, drops the cached client and re-authenticates
+    (re-reading .env for updated credentials).
+    """
     global _cached_groww_client
-    if _cached_groww_client:
+    with _token_lock:
+        if _cached_groww_client and not force_refresh:
+            return _cached_groww_client
+        from growwapi import GrowwAPI
+        _cached_groww_client = None
+        token = _get_access_token(force_refresh=force_refresh)
+        _cached_groww_client = GrowwAPI(token)
         return _cached_groww_client
-    from growwapi import GrowwAPI
-    token = _get_access_token()
-    _cached_groww_client = GrowwAPI(token)
-    return _cached_groww_client
+
+
+def _is_auth_error(exc: Exception) -> bool:
+    """Check if an exception is an authentication / token-expired error."""
+    msg = str(exc).lower()
+    return any(kw in msg for kw in (
+        "authentication failed", "token", "expired", "invalid",
+        "unauthorized", "401", "auth",
+    ))
+
 
 # Initialize client immediately so colorama.init() runs on the main thread
 try:
@@ -179,12 +217,14 @@ INDEX_TOKEN_DISPLAY = {
 }
 
 # ── Symbol Normalization ──
-# Map common user-facing aliases to the Groww API's expected underlying names
+# Map long / alternate names to the SHORT symbols expected by Groww option-chain API.
+# The API accepts BANKNIFTY (not "NIFTY BANK"), FINNIFTY (not "NIFTY FIN SERVICE"), etc.
 UNDERLYING_ALIAS_MAP = {
-    "BANKNIFTY": "NIFTY BANK",
-    "FINNIFTY": "NIFTY FIN SERVICE",
-    "MIDCPNIFTY": "NIFTY MID SELECT",
-    "NIFTY NEXT 50": "NIFTY NEXT 50",
+    "NIFTY BANK": "BANKNIFTY",
+    "NIFTY FIN SERVICE": "FINNIFTY",
+    "NIFTY MID SELECT": "MIDCPNIFTY",
+    "MIDCAP SELECT": "MIDCPNIFTY",
+    "NIFTY NEXT 50": "NIFTYNXT50",
 }
 
 def normalize_underlying(symbol: str) -> str:
@@ -699,6 +739,14 @@ async def get_index_prices():
 
         results = await asyncio.gather(*futures, return_exceptions=True)
 
+        # Check if ALL results are auth errors → retry with fresh token
+        auth_errors = [r for r in results if isinstance(r, Exception) and _is_auth_error(r)]
+        if auth_errors and len(auth_errors) == len(results):
+            logger.warning("All index fetches failed with auth error, refreshing token and retrying...")
+            groww = get_groww_client(force_refresh=True)
+            futures = [loop.run_in_executor(_executor, _fetch_single_index, c, groww) for c in INDEX_CONFIG]
+            results = await asyncio.gather(*futures, return_exceptions=True)
+
         indices = []
         for result in results:
             if isinstance(result, dict):
@@ -733,16 +781,32 @@ async def get_option_chain(
 
         logger.info(f"Fetching option chain: {underlying} (api: {api_underlying}) @ {exchange} expiry={expiry_date}")
 
-        # Run blocking API call in thread pool
+        # Run blocking API call in thread pool (with auto-retry on auth errors)
         loop = asyncio.get_event_loop()
-        oc_response = await loop.run_in_executor(
-            _executor,
-            lambda: groww.get_option_chain(
-                exchange=exchange_const,
-                underlying=api_underlying,
-                expiry_date=expiry_date,
+        try:
+            oc_response = await loop.run_in_executor(
+                _executor,
+                lambda: groww.get_option_chain(
+                    exchange=exchange_const,
+                    underlying=api_underlying,
+                    expiry_date=expiry_date,
+                )
             )
-        )
+        except Exception as api_err:
+            if _is_auth_error(api_err):
+                logger.warning(f"Auth error on option-chain, refreshing token and retrying...")
+                groww = get_groww_client(force_refresh=True)
+                exchange_const = groww.EXCHANGE_NSE if exchange.upper() == "NSE" else groww.EXCHANGE_BSE
+                oc_response = await loop.run_in_executor(
+                    _executor,
+                    lambda: groww.get_option_chain(
+                        exchange=exchange_const,
+                        underlying=api_underlying,
+                        expiry_date=expiry_date,
+                    )
+                )
+            else:
+                raise
 
         underlying_ltp = oc_response.get("underlying_ltp", 0)
         raw_strikes: Dict[str, Any] = oc_response.get("strikes", {})
@@ -825,6 +889,13 @@ async def get_option_chain(
     except HTTPException:
         raise
     except Exception as e:
+        if _is_auth_error(e):
+            raise HTTPException(
+                status_code=401,
+                detail="Authentication failed. Your API token has either expired or is invalid. "
+                       "Update GROWW_API_KEY + GROWW_API_SECRET in backend/.env and the server "
+                       "will auto-refresh on the next request."
+            )
         logger.error(f"Option chain error: {traceback.format_exc()}")
         raise HTTPException(status_code=500, detail=str(e))
 
@@ -842,14 +913,31 @@ async def get_quote(
         segment_const = groww.SEGMENT_CASH if segment.upper() == "CASH" else groww.SEGMENT_FNO
 
         loop = asyncio.get_event_loop()
-        quote = await loop.run_in_executor(
-            _executor,
-            lambda: groww.get_quote(
-                exchange=exchange_const,
-                segment=segment_const,
-                trading_symbol=symbol,
+        try:
+            quote = await loop.run_in_executor(
+                _executor,
+                lambda: groww.get_quote(
+                    exchange=exchange_const,
+                    segment=segment_const,
+                    trading_symbol=symbol,
+                )
             )
-        )
+        except Exception as api_err:
+            if _is_auth_error(api_err):
+                logger.warning("Auth error on quote, refreshing token and retrying...")
+                groww = get_groww_client(force_refresh=True)
+                exchange_const = groww.EXCHANGE_NSE if exchange.upper() == "NSE" else groww.EXCHANGE_BSE
+                segment_const = groww.SEGMENT_CASH if segment.upper() == "CASH" else groww.SEGMENT_FNO
+                quote = await loop.run_in_executor(
+                    _executor,
+                    lambda: groww.get_quote(
+                        exchange=exchange_const,
+                        segment=segment_const,
+                        trading_symbol=symbol,
+                    )
+                )
+            else:
+                raise
         return quote
     except HTTPException:
         raise
@@ -870,13 +958,28 @@ async def get_ltp(
         symbol_list = tuple(s.strip() for s in symbols.split(",") if s.strip())
 
         loop = asyncio.get_event_loop()
-        ltp_response = await loop.run_in_executor(
-            _executor,
-            lambda: groww.get_ltp(
-                segment=segment_const,
-                exchange_trading_symbols=symbol_list if len(symbol_list) > 1 else symbol_list[0],
+        try:
+            ltp_response = await loop.run_in_executor(
+                _executor,
+                lambda: groww.get_ltp(
+                    segment=segment_const,
+                    exchange_trading_symbols=symbol_list if len(symbol_list) > 1 else symbol_list[0],
+                )
             )
-        )
+        except Exception as api_err:
+            if _is_auth_error(api_err):
+                logger.warning("Auth error on LTP, refreshing token and retrying...")
+                groww = get_groww_client(force_refresh=True)
+                segment_const = groww.SEGMENT_CASH if segment.upper() == "CASH" else groww.SEGMENT_FNO
+                ltp_response = await loop.run_in_executor(
+                    _executor,
+                    lambda: groww.get_ltp(
+                        segment=segment_const,
+                        exchange_trading_symbols=symbol_list if len(symbol_list) > 1 else symbol_list[0],
+                    )
+                )
+            else:
+                raise
         return ltp_response
     except HTTPException:
         raise
@@ -896,12 +999,34 @@ async def get_expiry_dates(
     """
     try:
         loop = asyncio.get_event_loop()
-        valid_dates = await loop.run_in_executor(_executor, _discover_expiry_dates, underlying, exchange)
+        try:
+            valid_dates = await loop.run_in_executor(_executor, _discover_expiry_dates, underlying, exchange)
+        except Exception as api_err:
+            if _is_auth_error(api_err):
+                logger.warning("Auth error on expiry-dates, refreshing token and retrying...")
+                get_groww_client(force_refresh=True)
+                valid_dates = await loop.run_in_executor(_executor, _discover_expiry_dates, underlying, exchange)
+            else:
+                raise
         return {"expiry_dates": valid_dates, "underlying": underlying}
     except HTTPException:
         raise
     except Exception as e:
         logger.error(f"Expiry dates error: {traceback.format_exc()}")
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+@app.post("/api/refresh-token")
+async def refresh_token():
+    """Force re-authentication by re-reading .env and obtaining a fresh token."""
+    try:
+        _invalidate_groww_client()
+        get_groww_client(force_refresh=True)
+        return {"status": "ok", "message": "Token refreshed successfully"}
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error(f"Token refresh error: {traceback.format_exc()}")
         raise HTTPException(status_code=500, detail=str(e))
 
 
