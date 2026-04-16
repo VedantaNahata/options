@@ -60,8 +60,8 @@ export class FeedConnection {
                 this.scheduleReconnect();
             };
 
-            this.ws.onerror = (err) => {
-                console.error("[FeedConnection] Error:", err);
+            this.ws.onerror = () => {
+                console.warn("[FeedConnection] WebSocket error — backend may be offline");
                 this.ws?.close();
             };
         } catch (e) {

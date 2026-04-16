@@ -1,5 +1,6 @@
 "use client";
 
+import { useState } from "react";
 import { motion, AnimatePresence } from "framer-motion";
 import {
     X,
@@ -8,6 +9,8 @@ import {
     ArrowUpDown,
     Trash2,
     TrendingUp,
+    Save,
+    Check,
 } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Badge } from "@/components/ui/badge";
@@ -20,6 +23,8 @@ import {
     SelectTrigger,
     SelectValue,
 } from "@/components/ui/select";
+import { useAuth } from "@/lib/auth-context";
+import { saveStrategy } from "@/lib/strategies";
 import type { StrategyLeg, OptionType, TransactionType } from "@/lib/types";
 
 interface StrategyBuilderProps {
@@ -32,6 +37,8 @@ interface StrategyBuilderProps {
     underlyingLTP: number;
     lotSize: number;
     instrumentName: string;
+    expiryDate?: string;
+    exchange?: string;
 }
 
 function formatINR(n: number): string {
@@ -51,7 +58,33 @@ export function StrategyBuilder({
     underlyingLTP,
     lotSize,
     instrumentName,
+    expiryDate = "",
+    exchange = "NSE",
 }: StrategyBuilderProps) {
+    const { user } = useAuth();
+    const [saving, setSaving] = useState(false);
+    const [saved, setSaved] = useState(false);
+
+    const handleSave = async () => {
+        if (!user || legs.length === 0) return;
+        setSaving(true);
+        const name = `${instrumentName} ${legs.map(l => `${l.transaction_type} ${l.strike_price}${l.option_type}`).join(" / ")}`;
+        const { error } = await saveStrategy(
+            user.id,
+            name,
+            instrumentName,
+            exchange,
+            expiryDate,
+            underlyingLTP,
+            lotSize,
+            legs
+        );
+        setSaving(false);
+        if (!error) {
+            setSaved(true);
+            setTimeout(() => setSaved(false), 2000);
+        }
+    };
     // Calculate totals (premium is per unit, multiply by lots × lotSize)
     const totalPremium = legs.reduce((sum, leg) => {
         const mult = leg.transaction_type === "BUY" ? -1 : 1;
@@ -358,9 +391,24 @@ export function StrategyBuilder({
                                         variant="outline"
                                         size="sm"
                                         onClick={onClearAll}
-                                        className="flex-1 h-8 text-xs bg-transparent border-white/[0.08] hover:bg-white/[0.05] hover:border-[#FF5252]/30 text-white/60"
+                                        className="h-8 text-xs bg-transparent border-white/[0.08] hover:bg-white/[0.05] hover:border-[#FF5252]/30 text-white/60"
                                     >
-                                        <Trash2 size={12} className="mr-1" /> Clear All
+                                        <Trash2 size={12} className="mr-1" /> Clear
+                                    </Button>
+                                    <Button
+                                        size="sm"
+                                        onClick={handleSave}
+                                        disabled={saving || saved}
+                                        className="h-8 text-xs font-bold"
+                                        style={{
+                                            background: saved
+                                                ? "rgba(16, 185, 129, 0.2)"
+                                                : "rgba(108, 92, 231, 0.2)",
+                                            color: saved ? "#10B981" : "#a29bfe",
+                                            border: saved ? "1px solid rgba(16,185,129,0.3)" : "1px solid rgba(108,92,231,0.3)",
+                                        }}
+                                    >
+                                        {saved ? <><Check size={12} className="mr-1" /> Saved</> : saving ? "Saving..." : <><Save size={12} className="mr-1" /> Save</>}
                                     </Button>
                                     <Button
                                         size="sm"
@@ -369,7 +417,7 @@ export function StrategyBuilder({
                                             background: "linear-gradient(135deg, #6C5CE7 0%, #a29bfe 100%)",
                                         }}
                                     >
-                                        Analyze Strategy
+                                        Analyze
                                     </Button>
                                 </div>
                             </div>

@@ -189,6 +189,9 @@ _active_ws: set = set()
 _tracked_option_symbols: List[str] = []  # "NSE_NIFTY25N1823400CE" format
 _tracked_options_lock = threading.Lock()
 
+# Cache previous-close prices so we can derive change/change_perc from the live feed value
+_index_prev_close: Dict[str, float] = {}  # display_name -> previous close
+
 # ── Dynamic Instrument CSV State ──
 GROWW_INSTRUMENTS_CSV_URL = "https://growwapi-assets.groww.in/instruments/instrument.csv"
 _csv_last_loaded: Optional[datetime] = None
@@ -197,23 +200,15 @@ _CSV_REFRESH_HOURS = 6
 # Index tokens for GrowwFeed subscribe_index_value
 INDEX_FEED_TOKENS = [
     {"exchange": "NSE", "segment": "CASH", "exchange_token": "NIFTY"},
-    {"exchange": "NSE", "segment": "CASH", "exchange_token": "NIFTY BANK"},
-    {"exchange": "NSE", "segment": "CASH", "exchange_token": "NIFTY FIN SERVICE"},
     {"exchange": "BSE", "segment": "CASH", "exchange_token": "SENSEX"},
     {"exchange": "BSE", "segment": "CASH", "exchange_token": "BANKEX"},
-    {"exchange": "NSE", "segment": "CASH", "exchange_token": "NIFTY NEXT 50"},
-    {"exchange": "NSE", "segment": "CASH", "exchange_token": "NIFTY MID SELECT"},
 ]
 
 # Feed token → display name mapping
 INDEX_TOKEN_DISPLAY = {
     "NIFTY": "NIFTY 50",
-    "NIFTY BANK": "BANK NIFTY",
-    "NIFTY FIN SERVICE": "FIN NIFTY",
     "SENSEX": "SENSEX",
     "BANKEX": "BANKEX",
-    "NIFTY NEXT 50": "NIFTY NEXT 50",
-    "NIFTY MID SELECT": "MIDCAP SELECT",
 }
 
 # ── Symbol Normalization ──
@@ -406,12 +401,8 @@ def _discover_expiry_dates(underlying: str, exchange: str) -> List[str]:
 # Each index: (ltp_symbol, display_name, quote_exchange, quote_trading_symbol)
 INDEX_CONFIG = [
     ("NSE_NIFTY", "NIFTY 50", "NSE", "NIFTY"),
-    ("NSE_NIFTY BANK", "BANK NIFTY", "NSE", "NIFTY BANK"),
-    ("NSE_NIFTY FIN SERVICE", "FIN NIFTY", "NSE", "NIFTY FIN SERVICE"),
     ("BSE_SENSEX", "SENSEX", "BSE", "SENSEX"),
     ("BSE_BANKEX", "BANKEX", "BSE", "BANKEX"),
-    ("NSE_NIFTY NEXT 50", "NIFTY NEXT 50", "NSE", "NIFTY NEXT 50"),
-    ("NSE_NIFTY MID SELECT", "MIDCAP SELECT", "NSE", "NIFTY MID SELECT"),
 ]
 
 
@@ -430,9 +421,15 @@ def _fetch_single_index(config_tuple: tuple, groww: Any) -> Optional[dict]:
         change_perc = quote.get("day_change_perc")
 
         if ltp:
+            # Cache previous close so the real-time feed can compute change
+            ltp_f = float(ltp)
+            if change is not None:
+                prev_close = ltp_f - float(change)
+                if prev_close > 0:
+                    _index_prev_close[display_name] = prev_close
             return {
                 "symbol": display_name,
-                "ltp": float(ltp),
+                "ltp": ltp_f,
                 "change": float(change) if change is not None else None,
                 "change_perc": float(change_perc) if change_perc is not None else None,
             }
@@ -452,7 +449,9 @@ def _fetch_single_index(config_tuple: tuple, groww: Any) -> Optional[dict]:
                     "change_perc": None,
                 }
         except Exception:
-            logger.warning(f"Failed to fetch data for {display_name}: {e}")
+            # Some indices (NIFTY NEXT 50, etc.) may not work via REST — they
+            # still work via GrowwFeed, so just log at debug level.
+            logger.debug(f"Index REST fetch failed for {display_name} (will use feed): {e}")
     return None
 
 
@@ -505,11 +504,18 @@ def _transform_index_feed_data() -> List[dict]:
                 if not isinstance(data, dict):
                     continue
                 name = INDEX_TOKEN_DISPLAY.get(token, token)
+                ltp_val = data.get("value", 0)
+                change = None
+                change_perc = None
+                prev = _index_prev_close.get(name)
+                if prev and prev > 0 and ltp_val:
+                    change = round(float(ltp_val) - prev, 2)
+                    change_perc = round((change / prev) * 100, 2)
                 indices.append({
                     "symbol": name,
-                    "ltp": data.get("value", 0),
-                    "change": None,
-                    "change_perc": None,
+                    "ltp": ltp_val,
+                    "change": change,
+                    "change_perc": change_perc,
                 })
     return indices
 
@@ -616,6 +622,7 @@ async def websocket_feed(ws: WebSocket):
     async def sender():
         """Push real-time updates to client every second."""
         last_index_ts = 0
+        ltp_backoff = 0  # seconds of extra delay after rate-limit errors
         while True:
             try:
                 update = {}
@@ -628,11 +635,11 @@ async def websocket_feed(ws: WebSocket):
                         update["index_update"] = indices
                     last_index_ts = current_ts
 
-                # 2. Option LTPs — batch fetch from REST API
+                # 2. Option LTPs — batch fetch from REST API (skip if in backoff)
                 with _tracked_options_lock:
                     symbols = list(_tracked_option_symbols)
 
-                if symbols:
+                if symbols and ltp_backoff <= 0:
                     try:
                         groww = get_groww_client()
                         all_ltps = {}
@@ -651,7 +658,14 @@ async def websocket_feed(ws: WebSocket):
                         if all_ltps:
                             update["ltp_update"] = all_ltps
                     except Exception as e:
-                        logger.error(f"WS LTP poll error: {e}")
+                        err_msg = str(e).lower()
+                        if "rate limit" in err_msg or "rate_limit" in err_msg or "too many" in err_msg:
+                            ltp_backoff = 15  # back off 15 seconds on rate limit
+                            logger.warning(f"WS LTP rate-limited, backing off {ltp_backoff}s")
+                        else:
+                            logger.error(f"WS LTP poll error: {e}")
+                elif ltp_backoff > 0:
+                    ltp_backoff -= 2  # decrease by sleep interval
 
                 # 3. Push update
                 if update:
@@ -1246,6 +1260,12 @@ async def get_lot_size(
     return {"underlying": underlying, "lot_size": lot_size}
 
 
+@app.get("/api/instruments")
+async def get_instruments():
+    """Return the full list of F&O instruments loaded from the Groww CSV."""
+    return {"instruments": INSTRUMENTS, "count": len(INSTRUMENTS)}
+
+
 @app.get("/api/instruments/search")
 async def search_instruments(
     q: str = Query(..., min_length=1, description="Search query"),
@@ -1256,7 +1276,7 @@ async def search_instruments(
         inst for inst in INSTRUMENTS
         if query in inst["symbol"].upper() or query in inst["name"].upper()
     ]
-    return {"results": results[:15]}
+    return {"results": results[:30]}
 
 
 if __name__ == "__main__":

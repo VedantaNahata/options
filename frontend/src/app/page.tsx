@@ -3,6 +3,7 @@
 import { motion, useMotionValue, useTransform, animate } from "framer-motion";
 import { useEffect, useRef, useState } from "react";
 import Link from "next/link";
+import { useRouter } from "next/navigation";
 import {
   ArrowUpRight,
   Activity,
@@ -16,7 +17,9 @@ import {
   Globe,
   LineChart,
   Target,
+  LogOut,
 } from "lucide-react";
+import { useAuth } from "@/lib/auth-context";
 
 /* ─── Animated Counter ─── */
 function AnimatedCounter({ value, suffix = "" }: { value: number; suffix?: string }) {
@@ -306,9 +309,67 @@ function LiveTicker() {
   );
 }
 
+/* ─── User Avatar with Initials ─── */
+function UserAvatar({ user, onSignOut }: { user: any; onSignOut: () => void }) {
+  const [showPopup, setShowPopup] = useState(false);
+  const popupRef = useRef<HTMLDivElement>(null);
+
+  const firstName = user?.user_metadata?.first_name || "";
+  const lastName = user?.user_metadata?.last_name || "";
+  const initials = `${firstName.charAt(0)}${lastName.charAt(0)}`.toUpperCase() || "U";
+
+  useEffect(() => {
+    function handleClick(e: MouseEvent) {
+      if (popupRef.current && !popupRef.current.contains(e.target as Node)) {
+        setShowPopup(false);
+      }
+    }
+    document.addEventListener("mousedown", handleClick);
+    return () => document.removeEventListener("mousedown", handleClick);
+  }, []);
+
+  return (
+    <div className="relative" ref={popupRef}>
+      <button
+        onClick={() => setShowPopup(!showPopup)}
+        className="w-9 h-9 rounded-full flex items-center justify-center text-[13px] font-bold text-white transition-all duration-200 hover:scale-105"
+        style={{
+          background: "linear-gradient(135deg, #8B5CF6 0%, #7C3AED 100%)",
+          boxShadow: "0 0 15px rgba(139, 92, 246, 0.3)",
+        }}
+      >
+        {initials}
+      </button>
+      {showPopup && (
+        <motion.div
+          initial={{ opacity: 0, y: -4, scale: 0.95 }}
+          animate={{ opacity: 1, y: 0, scale: 1 }}
+          exit={{ opacity: 0, y: -4, scale: 0.95 }}
+          transition={{ duration: 0.15 }}
+          className="absolute right-0 top-full mt-2 w-48 glass-card rounded-xl overflow-hidden shadow-2xl z-50"
+        >
+          <div className="px-4 py-3 border-b" style={{ borderColor: "rgba(255,255,255,0.06)" }}>
+            <p className="text-[12px] font-medium text-white">{firstName} {lastName}</p>
+            <p className="text-[11px] text-[#6B6D78] truncate">{user?.email}</p>
+          </div>
+          <button
+            onClick={() => { setShowPopup(false); onSignOut(); }}
+            className="w-full flex items-center gap-2.5 px-4 py-3 text-[13px] text-[#6B6D78] hover:text-white hover:bg-white/[0.04] transition-colors"
+          >
+            <LogOut size={14} />
+            Sign out
+          </button>
+        </motion.div>
+      )}
+    </div>
+  );
+}
+
 /* ─── Main Page ─── */
 export default function LandingPage() {
   const heroRef = useRef<HTMLDivElement>(null);
+  const { user, loading: authLoading, signOut } = useAuth();
+  const router = useRouter();
 
   const features = [
     {
@@ -413,15 +474,30 @@ export default function LandingPage() {
             ))}
           </div>
 
-          {/* CTA */}
-          <Link
-            href="/option-chain"
-            target="_blank"
-            className="hidden md:flex items-center gap-2 px-5 py-2 rounded-xl text-[13px] font-medium text-white btn-primary"
-          >
-            Launch Terminal
-            <ArrowUpRight size={13} />
-          </Link>
+          {/* CTA / Auth */}
+          <div className="hidden md:flex items-center gap-3">
+            {authLoading ? (
+              <div className="w-20 h-8 rounded-lg bg-white/5 animate-pulse" />
+            ) : user ? (
+              <UserAvatar user={user} onSignOut={signOut} />
+            ) : (
+              <>
+                <Link
+                  href="/auth/signin"
+                  className="px-4 py-2 rounded-xl text-[13px] font-normal text-[#A78BFA] hover:text-white transition-colors"
+                >
+                  Sign In
+                </Link>
+                <Link
+                  href="/auth/signup"
+                  className="flex items-center gap-2 px-5 py-2 rounded-xl text-[13px] font-medium text-white btn-primary"
+                >
+                  Sign Up
+                  <ArrowUpRight size={13} />
+                </Link>
+              </>
+            )}
+          </div>
         </div>
       </motion.nav>
 
@@ -478,8 +554,7 @@ export default function LandingPage() {
             className="flex items-center justify-center gap-4"
           >
             <Link
-              href="/option-chain"
-              target="_blank"
+              href={user ? "/option-chain" : "/auth/signin"}
               className="group relative inline-flex items-center gap-2.5 px-8 py-3.5 rounded-xl text-[14px] font-medium text-white overflow-hidden btn-primary"
             >
               <span className="relative z-10">Open Option Chain</span>
@@ -736,8 +811,7 @@ export default function LandingPage() {
               every single day.
             </p>
             <Link
-              href="/option-chain"
-              target="_blank"
+              href={user ? "/option-chain" : "/auth/signin"}
               className="group relative inline-flex items-center gap-2.5 px-10 py-4 rounded-2xl text-[15px] font-medium text-white overflow-hidden btn-primary"
             >
               <span className="relative z-10">Start Trading Now</span>

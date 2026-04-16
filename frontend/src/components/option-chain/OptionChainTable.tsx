@@ -308,10 +308,10 @@ export function OptionChainTable({
                                                 className={`text-center text-[11px] font-medium ${callUnusual ? "animate-pulse-amber" : ""
                                                     }`}
                                                 style={{
-                                                    color: "var(--call-green)",
+                                                    color: "var(--muted-foreground)",
                                                     background: isCallITM
-                                                        ? `rgba(0, 230, 118, ${0.02 + callOIIntensity * 0.12})`
-                                                        : `rgba(0, 230, 118, ${callOIIntensity * 0.12})`,
+                                                        ? `rgba(255, 255, 255, ${0.02 + callOIIntensity * 0.06})`
+                                                        : `rgba(255, 255, 255, ${callOIIntensity * 0.06})`,
                                                 }}
                                             >
                                                 <Tooltip>
@@ -381,10 +381,10 @@ export function OptionChainTable({
                                                 className={`text-center text-[11px] font-medium ${putUnusual ? "animate-pulse-amber" : ""
                                                     }`}
                                                 style={{
-                                                    color: "var(--put-red)",
+                                                    color: "var(--muted-foreground)",
                                                     background: isPutITM
-                                                        ? `rgba(255, 82, 82, ${0.02 + putOIIntensity * 0.12})`
-                                                        : `rgba(255, 82, 82, ${putOIIntensity * 0.12})`,
+                                                        ? `rgba(255, 255, 255, ${0.02 + putOIIntensity * 0.06})`
+                                                        : `rgba(255, 255, 255, ${putOIIntensity * 0.06})`,
                                                 }}
                                             >
                                                 <Tooltip>

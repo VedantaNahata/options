@@ -83,6 +83,13 @@ export async function getLotSize(underlying: string) {
     );
 }
 
+/* ─── Instruments (full list from CSV) ─── */
+export async function getInstruments() {
+    return fetchAPI<{ instruments: import("./types").Instrument[]; count: number }>(
+        `/api/instruments`
+    );
+}
+
 /* ─── Instrument Search ─── */
 export async function searchInstruments(query: string) {
     const params = new URLSearchParams({ q: query });

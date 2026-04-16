@@ -36,8 +36,23 @@ function isMarketOpen(): boolean {
 
 // ─── Polling intervals ───
 const INDEX_POLL_INTERVAL = 3000;  // 3 seconds (fallback if WebSocket fails)
-const CHAIN_POLL_INTERVAL = 30000; // 30 seconds for full option chain refresh (Greeks, OI)
+const CHAIN_POLL_INTERVAL = 10000; // 10 seconds for full option chain refresh (PCR, OI, max pain)
 const LTP_POLL_INTERVAL = 2000;    // 2 seconds for fast LTP-only updates
+
+// Map instrument symbols to their index display names for real-time spot price from WebSocket feed
+const INSTRUMENT_INDEX_MAP: Record<string, string> = {
+    NIFTY: "NIFTY 50",
+    BANKNIFTY: "BANK NIFTY",
+    "NIFTY BANK": "BANK NIFTY",
+    FINNIFTY: "FIN NIFTY",
+    "NIFTY FIN SERVICE": "FIN NIFTY",
+    SENSEX: "SENSEX",
+    BANKEX: "BANKEX",
+    MIDCPNIFTY: "MIDCAP SELECT",
+    "NIFTY MID SELECT": "MIDCAP SELECT",
+    NIFTYNXT50: "NIFTY NEXT 50",
+    "NIFTY NEXT 50": "NIFTY NEXT 50",
+};
 
 export default function OptionChainPage() {
     // ─── State ───
@@ -195,6 +210,16 @@ export default function OptionChainPage() {
             if (indexPollRef.current) clearInterval(indexPollRef.current);
         };
     }, [fetchIndices]);
+
+    // ─── Sync spot price from WebSocket index feed ───
+    useEffect(() => {
+        const indexName = INSTRUMENT_INDEX_MAP[currentInstrument.toUpperCase()];
+        if (!indexName || indices.length === 0) return;
+        const match = indices.find((idx) => idx.symbol === indexName);
+        if (match && match.ltp > 0) {
+            setUnderlyingLTP(match.ltp);
+        }
+    }, [indices, currentInstrument]);
 
     // ─── Fetch Expiry Dates from Backend ───
     useEffect(() => {
@@ -512,6 +537,8 @@ export default function OptionChainPage() {
                     underlyingLTP={underlyingLTP}
                     lotSize={lotSize}
                     instrumentName={currentInstrument}
+                    expiryDate={selectedExpiry}
+                    exchange={currentExchange}
                 />
             </div>
         </div>
