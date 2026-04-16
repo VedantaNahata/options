@@ -1,5 +1,5 @@
 """
-OptiX Backend — FastAPI server for Groww API proxy
+FnoPilot Backend — FastAPI server for Groww API proxy
 ===================================================
 Endpoints are called by the frontend. The frontend handles polling intervals
 for real-time data updates.
@@ -158,8 +158,8 @@ except Exception as e:
 
 # ── FastAPI App ──
 app = FastAPI(
-    title="OptiX API",
-    description="Options Analytics Platform API — Proxy for Groww Trade API",
+    title="FnoPilot API",
+    description="FnoPilot — Options Analytics Platform API for Groww Trade",
     version="2.0.0",
 )
 
@@ -328,73 +328,39 @@ def find_atm_strike(underlying_ltp: float, strike_prices: list) -> float:
     return min(strike_prices, key=lambda s: abs(s - underlying_ltp))
 
 
-# ── Cached Expiry Dates ──
-_cached_expiry_dates: Dict[str, Any] = {}  # key: "underlying_exchange" -> {"dates": [...], "fetched_at": datetime}
+# ── Expiry Dates from CSV ──
+# Populated during CSV loading — maps "UNDERLYING_EXCHANGE" → sorted list of future expiry dates
+_csv_expiry_dates: Dict[str, List[str]] = {}
 
 
-def _probe_single_date(underlying: str, exchange_const: Any, date_str: str, groww: Any) -> Optional[str]:
-    """Probe a single date to check if it's a valid expiry. Returns date_str if valid, None otherwise."""
-    try:
-        oc = groww.get_option_chain(
-            exchange=exchange_const,
-            underlying=underlying,
-            expiry_date=date_str,
-        )
-        strikes = oc.get("strikes", {})
-        if len(strikes) > 0:
-            return date_str
-    except Exception:
-        pass
-    return None
-
-
-def _discover_expiry_dates(underlying: str, exchange: str) -> List[str]:
+def _get_expiry_dates_from_csv(underlying: str, exchange: str) -> List[str]:
     """
-    Discover valid expiry dates by probing the Groww option chain API
-    using parallel requests. Results are cached for 6 hours.
+    Return valid expiry dates for an underlying, extracted from the Groww
+    instrument CSV during startup.  No API probing needed — instant response.
+    Only returns dates >= today.
     """
     api_underlying = normalize_underlying(underlying)
-    cache_key = f"{api_underlying}_{exchange}"
-    cached = _cached_expiry_dates.get(cache_key)
-    if cached and (datetime.now() - cached["fetched_at"]).total_seconds() < 21600:  # 6 hours
-        logger.info(f"Using cached expiry dates for {api_underlying}@{exchange}")
-        return cached["dates"]
+    today_str = datetime.now().strftime("%Y-%m-%d")
 
-    groww = get_groww_client()
-    exchange_const = groww.EXCHANGE_NSE if exchange.upper() == "NSE" else groww.EXCHANGE_BSE
+    # Try exact key first, then just the underlying (some underlyings appear on both exchanges)
+    for key in (f"{api_underlying}_{exchange.upper()}", f"{underlying.upper()}_{exchange.upper()}"):
+        dates = _csv_expiry_dates.get(key, [])
+        if dates:
+            future = [d for d in dates if d >= today_str]
+            if future:
+                logger.info(f"CSV expiry dates for {key}: {len(future)} dates (nearest: {future[0]})")
+                return future
 
-    today = datetime.now()
-    candidate_dates: List[str] = []
-    for i in range(45):  # 45 days covers monthly expiries for stocks
-        d = today + timedelta(days=i)
-        if d.weekday() in (5, 6):  # Skip weekends
-            continue
-        candidate_dates.append(d.strftime("%Y-%m-%d"))
+    # Fallback: search all keys containing this underlying
+    for key, dates in _csv_expiry_dates.items():
+        if key.startswith(f"{api_underlying}_") or key.startswith(f"{underlying.upper()}_"):
+            future = [d for d in dates if d >= today_str]
+            if future:
+                logger.info(f"CSV expiry dates (fuzzy match {key}): {len(future)} dates")
+                return future
 
-    logger.info(f"Discovering expiry dates for {api_underlying}@{exchange} — probing {len(candidate_dates)} dates in parallel...")
-
-    valid_dates: List[str] = []
-    # Use ThreadPoolExecutor for parallel probing (up to 10 concurrent requests)
-    with ThreadPoolExecutor(max_workers=10) as pool:
-        future_to_date = {
-            pool.submit(_probe_single_date, api_underlying, exchange_const, d, groww): d
-            for d in candidate_dates
-        }
-        for future in as_completed(future_to_date):
-            result = future.result()
-            if result:
-                valid_dates.append(result)
-                logger.info(f"  Found expiry: {result}")
-
-    # Sort chronologically
-    valid_dates.sort()
-
-    if not valid_dates:
-        logger.warning(f"No valid expiry dates found for {api_underlying}@{exchange}")
-
-    _cached_expiry_dates[cache_key] = {"dates": valid_dates, "fetched_at": datetime.now()}
-    logger.info(f"Discovered {len(valid_dates)} expiry dates for {api_underlying} in parallel")
-    return valid_dates
+    logger.warning(f"No expiry dates found in CSV for {underlying} ({api_underlying}) @ {exchange}")
+    return []
 
 
 # ── Index Configuration ──
@@ -547,7 +513,7 @@ async def startup_event():
                 logger.error(f"Scheduled CSV refresh failed: {e}")
 
     asyncio.create_task(_csv_refresh_loop())
-    logger.info("OptiX API started — feed polling + CSV refresh launched")
+    logger.info("FnoPilot API started — feed polling + CSV refresh launched")
 
 
 # ── Real-Time Endpoints ──
@@ -720,7 +686,7 @@ async def websocket_feed(ws: WebSocket):
 
 @app.get("/")
 async def root():
-    return {"status": "ok", "service": "OptiX API", "version": "2.0.0"}
+    return {"status": "ok", "service": "FnoPilot API", "version": "2.0.0"}
 
 
 @app.get("/api/health")
@@ -1008,23 +974,12 @@ async def get_expiry_dates(
     exchange: str = Query("NSE", description="Exchange: NSE or BSE"),
 ):
     """
-    Discover and return valid expiry dates by probing the Groww option chain API.
-    Uses parallel probing for speed. Results are cached for 6 hours.
+    Return valid expiry dates extracted from the Groww instrument CSV.
+    Instant response — no API probing needed.
     """
     try:
-        loop = asyncio.get_event_loop()
-        try:
-            valid_dates = await loop.run_in_executor(_executor, _discover_expiry_dates, underlying, exchange)
-        except Exception as api_err:
-            if _is_auth_error(api_err):
-                logger.warning("Auth error on expiry-dates, refreshing token and retrying...")
-                get_groww_client(force_refresh=True)
-                valid_dates = await loop.run_in_executor(_executor, _discover_expiry_dates, underlying, exchange)
-            else:
-                raise
+        valid_dates = _get_expiry_dates_from_csv(underlying, exchange)
         return {"expiry_dates": valid_dates, "underlying": underlying}
-    except HTTPException:
-        raise
     except Exception as e:
         logger.error(f"Expiry dates error: {traceback.format_exc()}")
         raise HTTPException(status_code=500, detail=str(e))
@@ -1124,11 +1079,12 @@ _INDEX_DISPLAY_NAMES: Dict[str, str] = {
 
 def _load_instruments_from_csv() -> None:
     """
-    Download Groww's instrument CSV, parse it, and populate LOT_SIZES and
-    INSTRUMENTS.  Falls back to _FALLBACK_* constants on any failure.
+    Download Groww's instrument CSV, parse it, and populate LOT_SIZES,
+    INSTRUMENTS, and _csv_expiry_dates.
+    Falls back to _FALLBACK_* constants on any failure.
     Thread-safe: called from startup and periodic refresh.
     """
-    global LOT_SIZES, INSTRUMENTS, _csv_last_loaded
+    global LOT_SIZES, INSTRUMENTS, _csv_last_loaded, _csv_expiry_dates
 
     url = GROWW_INSTRUMENTS_CSV_URL
     logger.info(f"Downloading instrument CSV from {url} ...")
@@ -1147,10 +1103,11 @@ def _load_instruments_from_csv() -> None:
 
     reader = csv.DictReader(io.StringIO(csv_text))
 
-    # ── Pass 1: Collect FNO underlying → lot_size, and names from CASH EQ ──
+    # ── Pass 1: Collect FNO underlying → lot_size, expiry dates, and names from CASH EQ ──
     fno_underlyings: Dict[str, int] = {}       # symbol → lot_size
     fno_exchanges: Dict[str, str] = {}          # symbol → exchange (NSE/BSE)
     cash_names: Dict[str, str] = {}             # trading_symbol → company name
+    expiry_dates_map: Dict[str, set] = {}       # "UNDERLYING_EXCHANGE" → set of expiry dates
     rows_processed = 0
 
     for row in reader:
@@ -1166,10 +1123,11 @@ def _load_instruments_from_csv() -> None:
             if ts and name:
                 cash_names[ts] = name
 
-        # Collect FNO underlyings with lot sizes
+        # Collect FNO underlyings with lot sizes AND expiry dates
         if segment == "FNO":
             underlying = row.get("underlying_symbol", "").strip()
             lot_str = row.get("lot_size", "").strip()
+            expiry_date = row.get("expiry_date", "").strip()
             if not underlying or not lot_str:
                 continue
             # Skip test/internal symbols
@@ -1183,9 +1141,34 @@ def _load_instruments_from_csv() -> None:
                 fno_underlyings[underlying] = lot
                 fno_exchanges[underlying] = exchange
 
+            # Collect expiry dates for this underlying
+            if expiry_date and lot > 0:
+                key = f"{underlying}_{exchange}"
+                if key not in expiry_dates_map:
+                    expiry_dates_map[key] = set()
+                expiry_dates_map[key].add(expiry_date)
+
     if not fno_underlyings:
         logger.warning("CSV parsed but no FNO instruments found — keeping existing data")
         return
+
+    # ── Build expiry dates (sorted, deduplicated) ──
+    new_expiry_dates: Dict[str, List[str]] = {}
+    total_expiry_count = 0
+    for key, dates in expiry_dates_map.items():
+        sorted_dates = sorted(dates)
+        new_expiry_dates[key] = sorted_dates
+        total_expiry_count += len(sorted_dates)
+
+    # Also add alias-based keys so lookups by canonical name work
+    for alias, canonical in UNDERLYING_ALIAS_MAP.items():
+        for exchange_suffix in ("_NSE", "_BSE"):
+            alias_key = f"{alias}{exchange_suffix}"
+            canonical_key = f"{canonical}{exchange_suffix}"
+            if alias_key in new_expiry_dates and canonical_key not in new_expiry_dates:
+                new_expiry_dates[canonical_key] = new_expiry_dates[alias_key]
+            elif canonical_key in new_expiry_dates and alias_key not in new_expiry_dates:
+                new_expiry_dates[alias_key] = new_expiry_dates[canonical_key]
 
     # ── Build LOT_SIZES with alias support ──
     new_lot_sizes: Dict[str, int] = {}
@@ -1232,13 +1215,15 @@ def _load_instruments_from_csv() -> None:
     # ── Atomically swap ──
     LOT_SIZES = new_lot_sizes
     INSTRUMENTS = new_instruments
+    _csv_expiry_dates = new_expiry_dates
     _csv_last_loaded = datetime.now()
 
     logger.info(
         f"✓ Instrument CSV loaded: {len(new_lot_sizes)} lot sizes, "
         f"{len(new_instruments)} instruments "
         f"({sum(1 for i in new_instruments if i['type']=='INDEX')} indices + "
-        f"{sum(1 for i in new_instruments if i['type']=='STOCK')} stocks) "
+        f"{sum(1 for i in new_instruments if i['type']=='STOCK')} stocks), "
+        f"{total_expiry_count} expiry dates across {len(new_expiry_dates)} underlyings "
         f"from {rows_processed:,} CSV rows"
     )
 

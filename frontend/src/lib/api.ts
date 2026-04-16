@@ -1,6 +1,6 @@
 /**
- * OptiX API Client
- * ================
+ * FnoPilot API Client
+ * ===================
  * API calls with support for real-time polling.
  */
 

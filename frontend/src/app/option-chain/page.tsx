@@ -68,7 +68,7 @@ export default function OptionChainPage() {
     const [pcr, setPcr] = useState(0);
     const [maxPain, setMaxPain] = useState(0);
     const [atmStrike, setAtmStrike] = useState(0);
-    const [chainLoading, setChainLoading] = useState(false);
+    const [chainLoading, setChainLoading] = useState(true);
     const [chainError, setChainError] = useState<string | null>(null);
     const [lastUpdated, setLastUpdated] = useState<Date | null>(null);
     const [isLive, setIsLive] = useState(false);
@@ -87,6 +87,14 @@ export default function OptionChainPage() {
     const chainFetchInProgress = useRef(false);
     const feedRef = useRef<FeedConnection | null>(null);
     const [wsConnected, setWsConnected] = useState(false);
+
+    // Track the current instrument for closures
+    const currentInstrumentRef = useRef(currentInstrument);
+    const currentExchangeRef = useRef(currentExchange);
+    useEffect(() => {
+        currentInstrumentRef.current = currentInstrument;
+        currentExchangeRef.current = currentExchange;
+    }, [currentInstrument, currentExchange]);
 
     // ─── Lifecycle: Mark route as inactive on unmount ───
     useEffect(() => {
@@ -175,14 +183,6 @@ export default function OptionChainPage() {
                 }
             } catch {
                 console.error("Failed to fetch indices:", err);
-                if (isInitial && isActiveRef.current) {
-                    setIndices([
-                        { symbol: "NIFTY 50", ltp: 22547.55, change: 94.3, change_perc: 0.42 },
-                        { symbol: "BANK NIFTY", ltp: 48632.10, change: -124.5, change_perc: -0.26 },
-                        { symbol: "FIN NIFTY", ltp: 21845.90, change: 67.2, change_perc: 0.31 },
-                        { symbol: "SENSEX", ltp: 74339.44, change: 312.8, change_perc: 0.42 },
-                    ]);
-                }
             }
         } finally {
             indexFetchInProgress.current = false;
@@ -221,27 +221,30 @@ export default function OptionChainPage() {
         }
     }, [indices, currentInstrument]);
 
-    // ─── Fetch Expiry Dates from Backend ───
+    // ─── Fetch Expiry Dates from Backend (CSV-based, instant) ───
     useEffect(() => {
         async function loadExpiries() {
             setExpiryLoading(true);
+            setExpiryDates([]);
+            setSelectedExpiry("");
             try {
                 const data = await getExpiryDates(currentInstrument, currentExchange);
                 if (isActiveRef.current && data.expiry_dates.length > 0) {
                     setExpiryDates(data.expiry_dates);
                     setSelectedExpiry(data.expiry_dates[0]);
                 } else if (isActiveRef.current) {
-                    // Fallback: generate next few weekdays as candidates
-                    const fallback = generateFallbackExpiries();
-                    setExpiryDates(fallback);
-                    setSelectedExpiry(fallback[0] || "");
+                    setExpiryDates([]);
+                    setSelectedExpiry("");
+                    setChainError("No expiry dates available for this instrument.");
+                    setChainLoading(false);
                 }
             } catch (err) {
                 console.error("Failed to fetch expiry dates:", err);
                 if (isActiveRef.current) {
-                    const fallback = generateFallbackExpiries();
-                    setExpiryDates(fallback);
-                    setSelectedExpiry(fallback[0] || "");
+                    setExpiryDates([]);
+                    setSelectedExpiry("");
+                    setChainError("Failed to load expiry dates. Backend may be starting up.");
+                    setChainLoading(false);
                 }
             } finally {
                 if (isActiveRef.current) setExpiryLoading(false);
@@ -261,37 +264,10 @@ export default function OptionChainPage() {
                 }
             } catch (err) {
                 console.error("Failed to fetch lot size:", err);
-                // Fallback defaults
-                const defaults: Record<string, number> = {
-                    NIFTY: 25, BANKNIFTY: 15, "NIFTY BANK": 15,
-                    FINNIFTY: 25, "NIFTY FIN SERVICE": 25,
-                    SENSEX: 10, BANKEX: 15,
-                };
-                setLotSize(defaults[currentInstrument] || 1);
             }
         }
         loadLotSize();
     }, [currentInstrument]);
-
-    // Fallback expiry date generator
-    function generateFallbackExpiries(): string[] {
-        const expiries: string[] = [];
-        const today = new Date();
-        let d = new Date(today);
-        // Just generate next 8 weekdays as candidates
-        let count = 0;
-        while (count < 8) {
-            d.setDate(d.getDate() + 1);
-            if (d.getDay() !== 0 && d.getDay() !== 6) {
-                const yyyy = d.getFullYear();
-                const mm = String(d.getMonth() + 1).padStart(2, "0");
-                const dd = String(d.getDate()).padStart(2, "0");
-                expiries.push(`${yyyy}-${mm}-${dd}`);
-                count++;
-            }
-        }
-        return expiries;
-    }
 
     // ─── Fetch Option Chain ───
     const fetchOptionChain = useCallback(
@@ -308,6 +284,12 @@ export default function OptionChainPage() {
             try {
                 const data = await getOptionChain(symbol, expiry, exchange);
                 if (isActiveRef.current) {
+                    // Only apply data if it matches the current instrument
+                    if (symbol !== currentInstrumentRef.current) {
+                        chainFetchInProgress.current = false;
+                        return;
+                    }
+
                     if (data.strikes && data.strikes.length > 0) {
                         setStrikes(data.strikes);
                         setUnderlyingLTP(data.underlying_ltp);
@@ -371,18 +353,39 @@ export default function OptionChainPage() {
         };
     }, [currentInstrument, selectedExpiry, currentExchange, fetchOptionChain]);
 
-    // ─── Instrument Selection ───
+    // ─── Instrument Selection — IMMEDIATELY show skeleton ───
     const handleSelectInstrument = (inst: Instrument) => {
+        // Stop all polling immediately
+        if (chainPollRef.current) {
+            clearInterval(chainPollRef.current);
+            chainPollRef.current = null;
+        }
+        chainFetchInProgress.current = false;
+
+        // Immediately reset ALL state to show skeleton
         setCurrentInstrument(inst.symbol);
         setCurrentExchange(inst.exchange);
         setStrikes([]);
-        setStrategyLegs([]);
+        setChainLoading(true);
+        setChainError(null);
+        setExpiryLoading(true);
         setExpiryDates([]);
         setSelectedExpiry("");
+        setUnderlyingLTP(0);
+        setPcr(0);
+        setMaxPain(0);
+        setAtmStrike(0);
+        setStrategyLegs([]);
+        setIsStrategyOpen(false);
     };
 
     // ─── Expiry Change ───
     const handleExpiryChange = (expiry: string) => {
+        if (expiry === selectedExpiry) return;
+        // Show loading when switching expiry
+        setChainLoading(true);
+        setChainError(null);
+        setStrikes([]);
         setSelectedExpiry(expiry);
     };
 
@@ -461,7 +464,7 @@ export default function OptionChainPage() {
             />
 
             {/* Main content: Option Chain Table + Strategy Builder */}
-            <div className="flex-1 flex overflow-hidden">
+            <div className="flex-1 flex overflow-hidden relative">
                 {/* Live indicator + last updated */}
                 {isLive && lastUpdated && !chainLoading && (
                     <motion.div
@@ -495,7 +498,7 @@ export default function OptionChainPage() {
                             borderBottom: "1px solid rgba(255, 179, 0, 0.2)",
                         }}
                     >
-                        ⚠ {chainError.includes("demo") ? `Using demo data — ${chainError}` : chainError}
+                        ⚠ {chainError}
                     </motion.div>
                 )}
 
@@ -511,7 +514,7 @@ export default function OptionChainPage() {
                             borderBottom: "1px solid rgba(0, 200, 255, 0.1)",
                         }}
                     >
-                        Discovering valid expiry dates...
+                        Loading expiry dates...
                     </motion.div>
                 )}
 

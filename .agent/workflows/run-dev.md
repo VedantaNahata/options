@@ -1,5 +1,5 @@
 ---
-description: How to run the OptiX Options Analytics Platform locally
+description: How to run the FnoPilot Options Analytics Platform locally
 ---
 
 ## Prerequisites

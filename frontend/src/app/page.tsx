@@ -44,24 +44,24 @@ function AnimatedCounter({ value, suffix = "" }: { value: number; suffix?: strin
   );
 }
 
-/* ─── Aurora Background ─── */
+/* ─── Aurora Background (reduced intensity) ─── */
 function AuroraBackground() {
   return (
     <div className="absolute inset-0 overflow-hidden pointer-events-none">
-      {/* Main aurora blob */}
+      {/* Main aurora blob — reduced opacity */}
       <motion.div
         className="absolute w-[900px] h-[900px] rounded-full animate-aurora"
         style={{
-          background: "radial-gradient(circle, rgba(139,92,246,0.12) 0%, rgba(99,102,241,0.06) 40%, transparent 70%)",
+          background: "radial-gradient(circle, rgba(139,92,246,0.06) 0%, rgba(99,102,241,0.03) 40%, transparent 70%)",
           top: "-15%",
           right: "-15%",
         }}
       />
-      {/* Rose accent */}
+      {/* Rose accent — reduced */}
       <motion.div
         className="absolute w-[600px] h-[600px] rounded-full"
         style={{
-          background: "radial-gradient(circle, rgba(244,63,94,0.06) 0%, transparent 70%)",
+          background: "radial-gradient(circle, rgba(244,63,94,0.03) 0%, transparent 70%)",
           bottom: "10%",
           left: "-10%",
         }}
@@ -72,11 +72,11 @@ function AuroraBackground() {
         }}
         transition={{ duration: 25, repeat: Infinity, ease: "easeInOut" }}
       />
-      {/* Emerald accent */}
+      {/* Emerald accent — reduced */}
       <motion.div
         className="absolute w-[400px] h-[400px] rounded-full"
         style={{
-          background: "radial-gradient(circle, rgba(16,185,129,0.04) 0%, transparent 70%)",
+          background: "radial-gradient(circle, rgba(16,185,129,0.02) 0%, transparent 70%)",
           top: "60%",
           right: "20%",
         }}
@@ -86,20 +86,6 @@ function AuroraBackground() {
         }}
         transition={{ duration: 20, repeat: Infinity, ease: "easeInOut" }}
       />
-      {/* Amber warm glow */}
-      <motion.div
-        className="absolute w-[500px] h-[500px] rounded-full"
-        style={{
-          background: "radial-gradient(circle, rgba(245,158,11,0.03) 0%, transparent 70%)",
-          top: "30%",
-          left: "30%",
-        }}
-        animate={{
-          x: [0, 50, -30, 0],
-          y: [0, -40, 30, 0],
-        }}
-        transition={{ duration: 22, repeat: Infinity, ease: "easeInOut" }}
-      />
     </div>
   );
 }
@@ -108,26 +94,16 @@ function AuroraBackground() {
 function GridBackground() {
   return (
     <div className="absolute inset-0 overflow-hidden pointer-events-none">
-      <div className="absolute inset-0 grid-bg opacity-30" />
-      {/* Horizontal scanline */}
+      <div className="absolute inset-0 grid-bg opacity-20" />
+      {/* Horizontal scanline — subtler */}
       <motion.div
         className="absolute left-0 w-full h-px"
         style={{
           background:
-            "linear-gradient(90deg, transparent 0%, rgba(139,92,246,0.2) 30%, rgba(139,92,246,0.3) 50%, rgba(139,92,246,0.2) 70%, transparent 100%)",
+            "linear-gradient(90deg, transparent 0%, rgba(139,92,246,0.1) 30%, rgba(139,92,246,0.15) 50%, rgba(139,92,246,0.1) 70%, transparent 100%)",
         }}
         animate={{ top: ["0%", "100%"] }}
         transition={{ duration: 12, repeat: Infinity, ease: "linear" }}
-      />
-      {/* Vertical scanline */}
-      <motion.div
-        className="absolute top-0 h-full w-px"
-        style={{
-          background:
-            "linear-gradient(180deg, transparent 0%, rgba(139,92,246,0.15) 50%, transparent 100%)",
-        }}
-        animate={{ left: ["0%", "100%"] }}
-        transition={{ duration: 15, repeat: Infinity, ease: "linear" }}
       />
     </div>
   );
@@ -141,18 +117,18 @@ function ParticleField() {
 
   useEffect(() => {
     const colors = [
-      "rgba(139, 92, 246, 0.5)",
-      "rgba(167, 139, 250, 0.4)",
-      "rgba(99, 102, 241, 0.4)",
-      "rgba(244, 63, 94, 0.3)",
-      "rgba(245, 158, 11, 0.3)",
+      "rgba(139, 92, 246, 0.35)",
+      "rgba(167, 139, 250, 0.25)",
+      "rgba(99, 102, 241, 0.25)",
+      "rgba(244, 63, 94, 0.2)",
+      "rgba(245, 158, 11, 0.2)",
     ];
     setParticles(
-      Array.from({ length: 40 }, (_, i) => ({
+      Array.from({ length: 25 }, (_, i) => ({
         id: i,
         x: Math.random() * 100,
         y: Math.random() * 100,
-        size: Math.random() * 2.5 + 0.5,
+        size: Math.random() * 2 + 0.5,
         delay: Math.random() * 5,
         duration: Math.random() * 12 + 8,
         color: colors[Math.floor(Math.random() * colors.length)],
@@ -174,10 +150,10 @@ function ParticleField() {
             left: `${p.x}%`,
             top: `${p.y}%`,
             background: p.color,
-            boxShadow: `0 0 ${p.size * 4}px ${p.color}`,
+            boxShadow: `0 0 ${p.size * 3}px ${p.color}`,
           }}
           animate={{
-            opacity: [0, 0.8, 0],
+            opacity: [0, 0.6, 0],
             scale: [0.5, 1.2, 0.5],
           }}
           transition={{
@@ -219,13 +195,13 @@ function FeatureCard({
       <div
         className="absolute inset-0 rounded-2xl opacity-0 group-hover:opacity-100 transition-opacity duration-700"
         style={{
-          background: `radial-gradient(circle at 50% 0%, ${accentColor}12 0%, transparent 70%)`,
+          background: `radial-gradient(circle at 50% 0%, ${accentColor}08 0%, transparent 70%)`,
         }}
       />
       <div className="relative z-10">
         <div
           className="w-11 h-11 rounded-xl flex items-center justify-center mb-5 transition-all duration-300 group-hover:scale-110"
-          style={{ background: `${accentColor}15`, border: `1px solid ${accentColor}20` }}
+          style={{ background: `${accentColor}12`, border: `1px solid ${accentColor}18` }}
         >
           <Icon size={20} style={{ color: accentColor }} />
         </div>
@@ -258,7 +234,7 @@ function StatCard({
       viewport={{ once: true }}
       className="text-center group"
     >
-      <div className="text-3xl font-light gradient-text mb-1.5 tracking-[-0.03em] group-hover:animate-text-glow transition-all duration-300">
+      <div className="text-3xl font-light text-white/90 mb-1.5 tracking-[-0.03em] transition-all duration-300">
         <AnimatedCounter value={value} suffix={suffix} />
       </div>
       <div className="text-[11px] font-medium uppercase tracking-[0.1em] text-[#4B4D58]">
@@ -335,7 +311,7 @@ function UserAvatar({ user, onSignOut }: { user: any; onSignOut: () => void }) {
         className="w-9 h-9 rounded-full flex items-center justify-center text-[13px] font-bold text-white transition-all duration-200 hover:scale-105"
         style={{
           background: "linear-gradient(135deg, #8B5CF6 0%, #7C3AED 100%)",
-          boxShadow: "0 0 15px rgba(139, 92, 246, 0.3)",
+          boxShadow: "0 0 12px rgba(139, 92, 246, 0.2)",
         }}
       >
         {initials}
@@ -437,22 +413,22 @@ export default function LandingPage() {
               className="w-7 h-7 rounded-lg flex items-center justify-center relative overflow-hidden"
               style={{
                 background: "linear-gradient(135deg, #8B5CF6 0%, #7C3AED 100%)",
-                boxShadow: "0 0 20px rgba(139, 92, 246, 0.3)",
+                boxShadow: "0 0 15px rgba(139, 92, 246, 0.2)",
               }}
             >
-              <span className="text-white text-[10px] font-bold tracking-tight">OX</span>
+              <span className="text-white text-[9px] font-bold tracking-tight">FP</span>
               <motion.div
                 className="absolute inset-0"
                 style={{
                   background:
-                    "linear-gradient(135deg, transparent 0%, rgba(255,255,255,0.25) 50%, transparent 100%)",
+                    "linear-gradient(135deg, transparent 0%, rgba(255,255,255,0.2) 50%, transparent 100%)",
                 }}
                 animate={{ x: ["-100%", "200%"] }}
                 transition={{ duration: 3, repeat: Infinity, repeatDelay: 3 }}
               />
             </div>
             <span className="text-white text-base font-medium tracking-[-0.02em]">
-              Opti<span className="text-[#A78BFA]">X</span>
+              FnoPilot
             </span>
           </Link>
 
@@ -509,11 +485,12 @@ export default function LandingPage() {
             initial={{ opacity: 0, y: 20 }}
             animate={{ opacity: 1, y: 0 }}
             transition={{ duration: 0.6, delay: 0.2 }}
-            className="inline-flex items-center gap-2.5 px-4 py-1.5 rounded-full mb-8 glass-glow"
+            className="inline-flex items-center gap-2.5 px-4 py-1.5 rounded-full mb-8 glass-subtle"
+            style={{ border: "1px solid rgba(139, 92, 246, 0.1)" }}
           >
             <motion.div
               className="w-1.5 h-1.5 rounded-full"
-              style={{ background: "#10B981", boxShadow: "0 0 8px #10B981" }}
+              style={{ background: "#10B981", boxShadow: "0 0 6px #10B981" }}
               animate={{ opacity: [1, 0.3, 1] }}
               transition={{ duration: 2, repeat: Infinity }}
             />
@@ -522,7 +499,7 @@ export default function LandingPage() {
             </span>
           </motion.div>
 
-          {/* Headline */}
+          {/* Headline — no gradient text */}
           <motion.h1
             initial={{ opacity: 0, y: 30 }}
             animate={{ opacity: 1, y: 0 }}
@@ -531,7 +508,7 @@ export default function LandingPage() {
           >
             <span className="text-white">Options</span>
             <br />
-            <span className="gradient-text-hero font-light">Decoded.</span>
+            <span className="text-[#A78BFA] font-light">Decoded.</span>
           </motion.h1>
 
           {/* Sub */}
@@ -563,7 +540,7 @@ export default function LandingPage() {
                 className="absolute inset-0"
                 style={{
                   background:
-                    "linear-gradient(135deg, transparent 0%, rgba(255,255,255,0.12) 50%, transparent 100%)",
+                    "linear-gradient(135deg, transparent 0%, rgba(255,255,255,0.1) 50%, transparent 100%)",
                 }}
                 animate={{ x: ["-100%", "200%"] }}
                 transition={{ duration: 2.5, repeat: Infinity, repeatDelay: 3 }}
@@ -582,9 +559,9 @@ export default function LandingPage() {
           <LiveTicker />
         </div>
 
-        {/* Hero gradient backdrop */}
+        {/* Hero gradient backdrop — reduced */}
         <div
-          className="absolute bottom-0 left-1/2 -translate-x-1/2 w-[1000px] h-[500px] rounded-full blur-[150px] opacity-15 pointer-events-none"
+          className="absolute bottom-0 left-1/2 -translate-x-1/2 w-[800px] h-[400px] rounded-full blur-[150px] opacity-8 pointer-events-none"
           style={{
             background: "radial-gradient(circle, #8B5CF6 0%, #6366F1 40%, transparent 70%)",
           }}
@@ -623,14 +600,15 @@ export default function LandingPage() {
               whileInView={{ opacity: 1, scale: 1 }}
               transition={{ duration: 0.5 }}
               viewport={{ once: true }}
-              className="inline-flex items-center gap-2 px-3.5 py-1 rounded-full mb-6 text-[11px] font-normal tracking-wide text-[#A78BFA] glass-glow"
+              className="inline-flex items-center gap-2 px-3.5 py-1 rounded-full mb-6 text-[11px] font-normal tracking-wide text-[#A78BFA] glass-subtle"
+              style={{ border: "1px solid rgba(139, 92, 246, 0.1)" }}
             >
               <Sparkles size={12} />
               Platform Features
             </motion.div>
             <h2 className="text-3xl md:text-4xl font-light text-white/95 mb-4 tracking-[-0.03em]">
               Everything you need to{" "}
-              <span className="gradient-text">trade smarter</span>
+              <span className="text-[#A78BFA]">trade smarter</span>
             </h2>
             <p className="text-[14px] max-w-lg mx-auto font-light text-[#6B6D78] leading-[1.7]">
               Built for traders who demand precision. Every pixel designed for
@@ -657,7 +635,7 @@ export default function LandingPage() {
             className="text-center mb-12"
           >
             <h2 className="text-3xl md:text-4xl font-light text-white/95 mb-4 tracking-[-0.03em]">
-              See it in <span className="gradient-text">action</span>
+              See it in <span className="text-[#A78BFA]">action</span>
             </h2>
             <p className="text-[14px] font-light text-[#6B6D78]">
               A professional trading terminal, right in your browser
@@ -681,7 +659,7 @@ export default function LandingPage() {
                 <div className="w-2.5 h-2.5 rounded-full" style={{ background: "#F59E0B" }} />
                 <div className="w-2.5 h-2.5 rounded-full" style={{ background: "#10B981" }} />
                 <span className="ml-4 text-[11px] font-normal text-[#4B4D58]">
-                  OptiX Terminal — NIFTY Option Chain
+                  FnoPilot Terminal — NIFTY Option Chain
                 </span>
                 <div className="ml-auto flex items-center gap-2">
                   <span className="text-[10px] text-[#4B4D58]">LIVE</span>
@@ -751,8 +729,9 @@ export default function LandingPage() {
                       transition={{ delay: 0.08 * i }}
                       viewport={{ once: true }}
                       className={`grid grid-cols-9 items-center text-[12px] py-2.5 px-3 rounded-lg transition-all duration-300 ${
-                        row.isATM ? "glass-glow" : "hover:bg-[rgba(139,92,246,0.04)]"
+                        row.isATM ? "glass-subtle" : "hover:bg-[rgba(139,92,246,0.03)]"
                       }`}
+                      style={row.isATM ? { border: "1px solid rgba(139,92,246,0.1)" } : undefined}
                     >
                       {/* Call side */}
                       <div style={{ color: "var(--call-green)" }} className="font-normal">{row.callOI}</div>
@@ -784,9 +763,9 @@ export default function LandingPage() {
               </div>
             </div>
 
-            {/* Glow effect */}
+            {/* Glow effect — much reduced */}
             <div
-              className="absolute -bottom-20 left-1/2 -translate-x-1/2 w-[600px] h-[200px] rounded-full blur-[100px] opacity-10 pointer-events-none"
+              className="absolute -bottom-20 left-1/2 -translate-x-1/2 w-[400px] h-[150px] rounded-full blur-[100px] opacity-[0.04] pointer-events-none"
               style={{ background: "#8B5CF6" }}
             />
           </motion.div>
@@ -804,10 +783,10 @@ export default function LandingPage() {
           >
             <h2 className="text-3xl md:text-5xl font-extralight text-white/95 mb-6 tracking-[-0.03em]">
               Ready to trade with{" "}
-              <span className="gradient-text-multi">precision</span>?
+              <span className="text-[#A78BFA]">precision</span>?
             </h2>
             <p className="text-[15px] font-light text-[#6B6D78] mb-10 max-w-md mx-auto leading-[1.7]">
-              Join thousands of traders who use OptiX to decode the options market
+              Join thousands of traders who use FnoPilot to decode the options market
               every single day.
             </p>
             <Link
@@ -820,7 +799,7 @@ export default function LandingPage() {
                 className="absolute inset-0"
                 style={{
                   background:
-                    "linear-gradient(135deg, transparent 0%, rgba(255,255,255,0.15) 50%, transparent 100%)",
+                    "linear-gradient(135deg, transparent 0%, rgba(255,255,255,0.12) 50%, transparent 100%)",
                 }}
                 animate={{ x: ["-100%", "200%"] }}
                 transition={{ duration: 2.5, repeat: Infinity, repeatDelay: 2 }}
@@ -828,9 +807,9 @@ export default function LandingPage() {
             </Link>
           </motion.div>
         </div>
-        {/* Big glow */}
+        {/* Subdued glow */}
         <div
-          className="absolute top-1/2 left-1/2 -translate-x-1/2 -translate-y-1/2 w-[800px] h-[400px] rounded-full blur-[150px] opacity-10 pointer-events-none"
+          className="absolute top-1/2 left-1/2 -translate-x-1/2 -translate-y-1/2 w-[600px] h-[300px] rounded-full blur-[150px] opacity-[0.04] pointer-events-none"
           style={{ background: "linear-gradient(135deg, #8B5CF6, #EC4899)" }}
         />
       </section>
@@ -843,14 +822,14 @@ export default function LandingPage() {
               className="w-6 h-6 rounded-md flex items-center justify-center"
               style={{ background: "linear-gradient(135deg, #8B5CF6 0%, #7C3AED 100%)" }}
             >
-              <span className="text-white text-[8px] font-bold">OX</span>
+              <span className="text-white text-[8px] font-bold">FP</span>
             </div>
             <span className="text-[13px] font-normal text-white/60">
-              Opti<span className="text-[#A78BFA]">X</span>
+              FnoPilot
             </span>
           </div>
           <p className="text-[11px] text-[#4B4D58]">
-            © 2026 OptiX. Professional Options Analytics for Indian Markets.
+            © 2026 FnoPilot. Professional Options Analytics for Indian Markets.
           </p>
           <div className="flex items-center gap-6">
             {["Privacy", "Terms", "API"].map((link) => (

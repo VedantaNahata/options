@@ -11,7 +11,7 @@ const inter = Inter({
 });
 
 export const metadata: Metadata = {
-  title: "OptiX — Options Analytics Platform",
+  title: "FnoPilot — Options Analytics Platform",
   description:
     "Professional-grade options analytics for the Indian stock market. Real-time option chains, Greeks, IV surfaces, and strategy building.",
   keywords: [

@@ -96,9 +96,19 @@ export function AnalyticsBar({
                                 {formatDate(date)}
                             </button>
                         ))
+                    ) : loading ? (
+                        <div className="flex items-center gap-2">
+                            {Array.from({ length: 5 }).map((_, i) => (
+                                <div
+                                    key={i}
+                                    className="h-7 rounded-lg animate-shimmer"
+                                    style={{ width: `${60 + Math.random() * 20}px` }}
+                                />
+                            ))}
+                        </div>
                     ) : (
                         <span className="text-[10px]" style={{ color: "var(--muted-foreground)" }}>
-                            {loading ? "Loading expiry dates..." : "No expiry dates available"}
+                            No expiry dates available
                         </span>
                     )}
                 </div>
