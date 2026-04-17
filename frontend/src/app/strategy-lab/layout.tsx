@@ -2,16 +2,15 @@ import type { Metadata } from "next";
 import { AuthGuard } from "@/components/auth-guard";
 
 export const metadata: Metadata = {
-    title: "Option Chain — FnoPilot",
+    title: "Strategy Lab — FnoPilot",
     description:
-        "Real-time option chain with OI heatmaps, Greeks, PCR ratio, Max Pain, and strategy builder for Indian indices and stocks.",
+        "Build, analyze, and optimize multi-leg options strategies with real-time payoff charts, Greeks, what-if scenarios, and margin estimation.",
 };
 
-export default function OptionChainLayout({
+export default function StrategyLabLayout({
     children,
 }: {
     children: React.ReactNode;
 }) {
     return <AuthGuard>{children}</AuthGuard>;
 }
-

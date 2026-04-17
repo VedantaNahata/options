@@ -1,5 +1,5 @@
 /**
- * OptiX WebSocket Feed Client
+ * FnoPilot WebSocket Feed Client
  * ============================
  * Connects to the backend WebSocket for real-time index values and option LTPs.
  * Auto-reconnects on disconnect.

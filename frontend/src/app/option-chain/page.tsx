@@ -6,7 +6,7 @@ import { TopBar } from "@/components/option-chain/TopBar";
 import { AnalyticsBar } from "@/components/option-chain/AnalyticsBar";
 import { OptionChainTable } from "@/components/option-chain/OptionChainTable";
 import { StrategyBuilder } from "@/components/option-chain/StrategyBuilder";
-import { getIndexPrices, getOptionChain, getExpiryDates, getLotSize, batchLTP, getLiveIndices } from "@/lib/api";
+import { getIndexPrices, getOptionChain, getExpiryDates, getLotSize, getLiveIndices } from "@/lib/api";
 import { FeedConnection } from "@/lib/ws";
 import type {
     IndexPrice,
@@ -17,29 +17,9 @@ import type {
     TransactionType,
 } from "@/lib/types";
 
-// ─── Market hours check (IST: 9:15 AM - 3:30 PM, Mon-Fri) ───
-function isMarketOpen(): boolean {
-    const now = new Date();
-    const istOffset = 5.5 * 60 * 60 * 1000; // IST is UTC+5:30
-    const istTime = new Date(now.getTime() + istOffset + now.getTimezoneOffset() * 60 * 1000);
-    const day = istTime.getDay();
-    const hours = istTime.getHours();
-    const minutes = istTime.getMinutes();
-    const totalMinutes = hours * 60 + minutes;
+const INDEX_POLL_INTERVAL = 3000;
+const CHAIN_POLL_INTERVAL = 10000;
 
-    // Weekday check (Mon=1, Fri=5)
-    if (day === 0 || day === 6) return false;
-
-    // Market hours: 9:15 AM (555 min) to 3:30 PM (930 min)
-    return totalMinutes >= 555 && totalMinutes <= 930;
-}
-
-// ─── Polling intervals ───
-const INDEX_POLL_INTERVAL = 3000;  // 3 seconds (fallback if WebSocket fails)
-const CHAIN_POLL_INTERVAL = 10000; // 10 seconds for full option chain refresh (PCR, OI, max pain)
-const LTP_POLL_INTERVAL = 2000;    // 2 seconds for fast LTP-only updates
-
-// Map instrument symbols to their index display names for real-time spot price from WebSocket feed
 const INSTRUMENT_INDEX_MAP: Record<string, string> = {
     NIFTY: "NIFTY 50",
     BANKNIFTY: "BANK NIFTY",
@@ -55,7 +35,6 @@ const INSTRUMENT_INDEX_MAP: Record<string, string> = {
 };
 
 export default function OptionChainPage() {
-    // ─── State ───
     const [indices, setIndices] = useState<IndexPrice[]>([]);
     const [indicesLoading, setIndicesLoading] = useState(true);
     const [currentInstrument, setCurrentInstrument] = useState("NIFTY");
@@ -70,49 +49,38 @@ export default function OptionChainPage() {
     const [atmStrike, setAtmStrike] = useState(0);
     const [chainLoading, setChainLoading] = useState(true);
     const [chainError, setChainError] = useState<string | null>(null);
-    const [lastUpdated, setLastUpdated] = useState<Date | null>(null);
-    const [isLive, setIsLive] = useState(false);
 
-    // Strategy Builder
     const [strategyLegs, setStrategyLegs] = useState<StrategyLeg[]>([]);
     const [isStrategyOpen, setIsStrategyOpen] = useState(false);
-    const [lotSize, setLotSize] = useState<number>(25); // NIFTY default lot size
+    const [lotSize, setLotSize] = useState<number>(25);
 
-    // Track if route is active
     const isActiveRef = useRef(true);
     const indexPollRef = useRef<NodeJS.Timeout | null>(null);
     const chainPollRef = useRef<NodeJS.Timeout | null>(null);
-    const ltpPollRef = useRef<NodeJS.Timeout | null>(null);
     const indexFetchInProgress = useRef(false);
     const chainFetchInProgress = useRef(false);
     const feedRef = useRef<FeedConnection | null>(null);
-    const [wsConnected, setWsConnected] = useState(false);
 
-    // Track the current instrument for closures
     const currentInstrumentRef = useRef(currentInstrument);
     const currentExchangeRef = useRef(currentExchange);
+
     useEffect(() => {
         currentInstrumentRef.current = currentInstrument;
         currentExchangeRef.current = currentExchange;
     }, [currentInstrument, currentExchange]);
 
-    // ─── Lifecycle: Mark route as inactive on unmount ───
     useEffect(() => {
         isActiveRef.current = true;
 
-        // ── Initialize WebSocket Feed Connection ──
         const feed = new FeedConnection({
             onIndexUpdate: (feedIndices) => {
                 if (isActiveRef.current) {
                     setIndices(feedIndices);
                     setIndicesLoading(false);
-                    setLastUpdated(new Date());
-                    setIsLive(true);
                 }
             },
             onLTPUpdate: (ltpData) => {
                 if (isActiveRef.current) {
-                    // Update strike LTPs from feed data
                     setStrikes((prev) => {
                         if (prev.length === 0) return prev;
                         let changed = false;
@@ -140,12 +108,10 @@ export default function OptionChainPage() {
                         });
                         return changed ? updated : prev;
                     });
-                    setLastUpdated(new Date());
                 }
             },
-            onConnect: () => setWsConnected(true),
-            onDisconnect: () => setWsConnected(false),
         });
+
         feed.connect();
         feedRef.current = feed;
 
@@ -153,16 +119,13 @@ export default function OptionChainPage() {
             isActiveRef.current = false;
             if (indexPollRef.current) clearInterval(indexPollRef.current);
             if (chainPollRef.current) clearInterval(chainPollRef.current);
-            if (ltpPollRef.current) clearInterval(ltpPollRef.current);
             feed.destroy();
             feedRef.current = null;
         };
     }, []);
 
-    // ─── Fetch Index Prices (uses live/feed endpoint for speed) ───
     const fetchIndices = useCallback(async (isInitial = false) => {
-        if (!isActiveRef.current) return;
-        if (indexFetchInProgress.current) return;
+        if (!isActiveRef.current || indexFetchInProgress.current) return;
         indexFetchInProgress.current = true;
 
         if (isInitial) setIndicesLoading(true);
@@ -171,15 +134,12 @@ export default function OptionChainPage() {
             const data = await getLiveIndices();
             if (isActiveRef.current) {
                 setIndices(data.indices);
-                setLastUpdated(new Date());
             }
         } catch (err) {
-            // Fallback to regular endpoint
             try {
                 const data = await getIndexPrices();
                 if (isActiveRef.current) {
                     setIndices(data.indices);
-                    setLastUpdated(new Date());
                 }
             } catch {
                 console.error("Failed to fetch indices:", err);
@@ -192,17 +152,13 @@ export default function OptionChainPage() {
         }
     }, []);
 
-    // ─── Index Prices Polling ───
     useEffect(() => {
-        // Fetch once immediately
         fetchIndices(true).then(() => {
-            // Only start polling AFTER initial fetch completes
-            if (isActiveRef.current) {
-                if (indexPollRef.current) clearInterval(indexPollRef.current);
-                indexPollRef.current = setInterval(() => {
-                    fetchIndices(false);
-                }, INDEX_POLL_INTERVAL);
-                setIsLive(true);
+                if (isActiveRef.current) {
+                    if (indexPollRef.current) clearInterval(indexPollRef.current);
+                    indexPollRef.current = setInterval(() => {
+                        fetchIndices(false);
+                    }, INDEX_POLL_INTERVAL);
             }
         });
 
@@ -211,7 +167,6 @@ export default function OptionChainPage() {
         };
     }, [fetchIndices]);
 
-    // ─── Sync spot price from WebSocket index feed ───
     useEffect(() => {
         const indexName = INSTRUMENT_INDEX_MAP[currentInstrument.toUpperCase()];
         if (!indexName || indices.length === 0) return;
@@ -221,7 +176,6 @@ export default function OptionChainPage() {
         }
     }, [indices, currentInstrument]);
 
-    // ─── Fetch Expiry Dates from Backend (CSV-based, instant) ───
     useEffect(() => {
         async function loadExpiries() {
             setExpiryLoading(true);
@@ -254,7 +208,6 @@ export default function OptionChainPage() {
         loadExpiries();
     }, [currentInstrument, currentExchange]);
 
-    // ─── Fetch Lot Size ───
     useEffect(() => {
         async function loadLotSize() {
             try {
@@ -269,11 +222,10 @@ export default function OptionChainPage() {
         loadLotSize();
     }, [currentInstrument]);
 
-    // ─── Fetch Option Chain ───
     const fetchOptionChain = useCallback(
         async (symbol: string, expiry: string, exchange: string, isInitial = false) => {
             if (!isActiveRef.current || !expiry) return;
-            if (chainFetchInProgress.current && !isInitial) return; // Skip polling if fetch in progress
+            if (chainFetchInProgress.current && !isInitial) return;
             chainFetchInProgress.current = true;
 
             if (isInitial) {
@@ -284,7 +236,6 @@ export default function OptionChainPage() {
             try {
                 const data = await getOptionChain(symbol, expiry, exchange);
                 if (isActiveRef.current) {
-                    // Only apply data if it matches the current instrument
                     if (symbol !== currentInstrumentRef.current) {
                         chainFetchInProgress.current = false;
                         return;
@@ -297,14 +248,11 @@ export default function OptionChainPage() {
                         setMaxPain(data.max_pain);
                         setAtmStrike(data.atm_strike);
                         setChainError(null);
-                        setLastUpdated(new Date());
 
-                        // Update lot size from API response
                         if (data.lot_size && data.lot_size > 0) {
                             setLotSize(data.lot_size);
                         }
 
-                        // Subscribe to LTP updates via WebSocket
                         const tradingSymbols: string[] = [];
                         data.strikes.forEach((s) => {
                             if (s.CE?.trading_symbol) tradingSymbols.push(s.CE.trading_symbol);
@@ -318,10 +266,11 @@ export default function OptionChainPage() {
                         setStrikes([]);
                     }
                 }
-            } catch (err: any) {
+            } catch (err: unknown) {
                 console.error("Failed to fetch option chain:", err);
                 if (isInitial && isActiveRef.current) {
-                    setChainError(err.message || "Failed to load option chain");
+                    const message = err instanceof Error ? err.message : "Failed to load option chain";
+                    setChainError(message);
                     setStrikes([]);
                 }
             } finally {
@@ -334,10 +283,8 @@ export default function OptionChainPage() {
         []
     );
 
-    // ─── Option Chain Polling ───
     useEffect(() => {
         if (currentInstrument && selectedExpiry) {
-            // Initial fetch, then start polling AFTER it completes
             fetchOptionChain(currentInstrument, selectedExpiry, currentExchange, true).then(() => {
                 if (isActiveRef.current && currentInstrument && selectedExpiry) {
                     if (chainPollRef.current) clearInterval(chainPollRef.current);
@@ -353,16 +300,13 @@ export default function OptionChainPage() {
         };
     }, [currentInstrument, selectedExpiry, currentExchange, fetchOptionChain]);
 
-    // ─── Instrument Selection — IMMEDIATELY show skeleton ───
     const handleSelectInstrument = (inst: Instrument) => {
-        // Stop all polling immediately
         if (chainPollRef.current) {
             clearInterval(chainPollRef.current);
             chainPollRef.current = null;
         }
         chainFetchInProgress.current = false;
 
-        // Immediately reset ALL state to show skeleton
         setCurrentInstrument(inst.symbol);
         setCurrentExchange(inst.exchange);
         setStrikes([]);
@@ -379,17 +323,14 @@ export default function OptionChainPage() {
         setIsStrategyOpen(false);
     };
 
-    // ─── Expiry Change ───
     const handleExpiryChange = (expiry: string) => {
         if (expiry === selectedExpiry) return;
-        // Show loading when switching expiry
         setChainLoading(true);
         setChainError(null);
         setStrikes([]);
         setSelectedExpiry(expiry);
     };
 
-    // ─── Strategy Builder ───
     const handleStrikeSelect = (
         strikePrice: number,
         optionType: OptionType,
@@ -436,11 +377,7 @@ export default function OptionChainPage() {
     };
 
     return (
-        <div
-            className="h-screen flex flex-col overflow-hidden"
-            style={{ background: "#0A0B0F" }}
-        >
-            {/* Top Bar with index prices and search */}
+        <div className="h-screen flex flex-col overflow-hidden" style={{ background: "#0A0B0F" }}>
             <TopBar
                 indices={indices}
                 indicesLoading={indicesLoading}
@@ -448,7 +385,6 @@ export default function OptionChainPage() {
                 currentInstrument={currentInstrument}
             />
 
-            {/* Analytics Bar with PCR, Max Pain, expiry tabs */}
             <AnalyticsBar
                 underlyingLTP={underlyingLTP}
                 pcr={pcr}
@@ -463,30 +399,7 @@ export default function OptionChainPage() {
                 lotSize={lotSize}
             />
 
-            {/* Main content: Option Chain Table + Strategy Builder */}
             <div className="flex-1 flex overflow-hidden relative">
-                {/* Live indicator + last updated */}
-                {isLive && lastUpdated && !chainLoading && (
-                    <motion.div
-                        initial={{ opacity: 0, y: -10 }}
-                        animate={{ opacity: 1, y: 0 }}
-                        className="absolute top-0 right-4 z-30 px-3 py-1 text-[9px] font-medium flex items-center gap-1.5"
-                        style={{
-                            color: "rgba(0, 255, 136, 0.8)",
-                        }}
-                    >
-                        <span
-                            className="inline-block w-1.5 h-1.5 rounded-full animate-pulse"
-                            style={{ background: "#00FF88" }}
-                        />
-                        LIVE
-                        <span style={{ color: "rgba(255,255,255,0.3)" }}>
-                            {lastUpdated.toLocaleTimeString()}
-                        </span>
-                    </motion.div>
-                )}
-
-                {/* Error banner */}
                 {chainError && !chainLoading && (
                     <motion.div
                         initial={{ opacity: 0, y: -10 }}
@@ -498,11 +411,10 @@ export default function OptionChainPage() {
                             borderBottom: "1px solid rgba(255, 179, 0, 0.2)",
                         }}
                     >
-                        ⚠ {chainError}
+                        Warning: {chainError}
                     </motion.div>
                 )}
 
-                {/* Expiry loading indicator */}
                 {expiryLoading && (
                     <motion.div
                         initial={{ opacity: 0 }}
@@ -510,7 +422,7 @@ export default function OptionChainPage() {
                         className="absolute top-0 left-0 right-0 z-30 px-6 py-2 text-center text-[10px] font-medium"
                         style={{
                             background: "rgba(0, 200, 255, 0.05)",
-                            color: "rgba(0, 200, 255, 0.6)",
+                            color: "rgba(0, 200, 255, 0.65)",
                             borderBottom: "1px solid rgba(0, 200, 255, 0.1)",
                         }}
                     >
@@ -518,7 +430,6 @@ export default function OptionChainPage() {
                     </motion.div>
                 )}
 
-                {/* Option Chain Table */}
                 <OptionChainTable
                     strikes={strikes}
                     atmStrike={atmStrike}
@@ -529,7 +440,6 @@ export default function OptionChainPage() {
                     onStrikeSelect={handleStrikeSelect}
                 />
 
-                {/* Strategy Builder Side Panel */}
                 <StrategyBuilder
                     isOpen={isStrategyOpen}
                     onClose={() => setIsStrategyOpen(false)}

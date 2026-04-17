@@ -106,3 +106,50 @@ export interface Strategy {
     legs: StrategyLeg[];
     underlying_ltp: number;
 }
+
+/* ─── Strategy Lab Types ─── */
+
+export interface StrategyTemplate {
+    id: string;
+    name: string;
+    description: string;
+    legs: {
+        strikeOffset: number; // offset from ATM in strike steps
+        option_type: OptionType;
+        transaction_type: TransactionType;
+        lots: number;
+    }[];
+    category: "neutral" | "bullish" | "bearish" | "volatile";
+}
+
+export interface PayoffPoint {
+    spot: number;
+    pnlAtExpiry: number;
+    pnlCurrent: number;
+}
+
+export interface StrategyAnalysis {
+    payoffCurve: PayoffPoint[];
+    maxProfit: number;
+    maxProfitSpot: number;
+    maxLoss: number;
+    maxLossSpot: number;
+    upperBreakeven: number | null;
+    lowerBreakeven: number | null;
+    netPremium: number;
+    riskRewardRatio: number;
+    popEstimate: number; // probability of profit estimate
+}
+
+export interface MarginEstimate {
+    spanMargin: number;
+    exposureMargin: number;
+    totalMargin: number;
+    brokerage: number;
+    stt: number;
+    transactionCharges: number;
+    gst: number;
+    sebiCharges: number;
+    stampDuty: number;
+    totalCharges: number;
+}

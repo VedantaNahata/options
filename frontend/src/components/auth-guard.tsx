@@ -25,8 +25,9 @@ export function AuthGuard({ children }: { children: React.ReactNode }) {
                             boxShadow: "0 0 20px rgba(139, 92, 246, 0.3)",
                         }}
                     >
-                        <span className="text-white text-[11px] font-bold">OX</span>
+                        <span className="text-white text-[11px] font-bold">FP</span>
                     </div>
+                    <span className="text-xs text-[#A78BFA] tracking-wide">FnoPilot</span>
                     <div className="w-6 h-6 border-2 border-[#8B5CF6]/30 border-t-[#8B5CF6] rounded-full animate-spin" />
                 </div>
             </div>

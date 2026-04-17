@@ -8,7 +8,9 @@ import {
     TrendingDown,
     Minus,
     X,
+    FlaskConical,
 } from "lucide-react";
+import Link from "next/link";
 import { Input } from "@/components/ui/input";
 import { Badge } from "@/components/ui/badge";
 import { getInstruments } from "@/lib/api";
@@ -261,6 +263,20 @@ export function TopBar({
                         )}
                     </AnimatePresence>
                 </div>
+
+                {/* Strategy Lab link */}
+                <Link
+                    href="/strategy-lab"
+                    className="flex items-center gap-1.5 h-8 px-3 rounded-lg text-[11px] font-semibold transition-all hover:scale-[1.02]"
+                    style={{
+                        background: "linear-gradient(135deg, rgba(139,92,246,0.12), rgba(99,102,241,0.12))",
+                        color: "#A78BFA",
+                        border: "1px solid rgba(139,92,246,0.2)",
+                    }}
+                >
+                    <FlaskConical size={13} />
+                    Strategy Lab
+                </Link>
             </div>
         </div>
     );

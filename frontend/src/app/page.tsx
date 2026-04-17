@@ -436,7 +436,7 @@ export default function LandingPage() {
           <div className="hidden md:flex items-center gap-0.5">
             {[
               { label: "Option Chain", href: "/option-chain" },
-              { label: "Strategy Lab", href: "#" },
+              { label: "Strategy Lab", href: "/strategy-lab" },
               { label: "Analytics", href: "#" },
             ].map((item) => (
               <Link

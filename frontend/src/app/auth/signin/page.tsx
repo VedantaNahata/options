@@ -68,10 +68,10 @@ export default function SignInPage() {
                                 boxShadow: "0 0 20px rgba(139, 92, 246, 0.3)",
                             }}
                         >
-                            <span className="text-white text-[11px] font-bold">OX</span>
+                            <span className="text-white text-[11px] font-bold">FP</span>
                         </div>
                         <span className="text-white text-lg font-medium">
-                            Opti<span className="text-[#A78BFA]">X</span>
+                            Fno<span className="text-[#A78BFA]">Pilot</span>
                         </span>
                     </div>
 

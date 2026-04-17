@@ -33,7 +33,7 @@ from dotenv import load_dotenv
 load_dotenv()
 
 logging.basicConfig(level=logging.INFO)
-logger = logging.getLogger("optix")
+logger = logging.getLogger("FnoPilot")
 
 # ── Groww API Setup ──
 _cached_access_token: Optional[str] = None
