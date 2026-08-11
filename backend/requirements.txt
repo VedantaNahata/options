@@ -1,7 +1,0 @@
-growwapi
-fastapi[standard]
-uvicorn[standard]
-python-dotenv
-httpx
-pydantic
-pyotp

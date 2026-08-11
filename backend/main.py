@@ -8,6 +8,12 @@ Authentication:
   1. API Key + Secret  → set GROWW_API_KEY and GROWW_API_SECRET in .env
   2. TOTP               → set GROWW_TOTP_TOKEN and GROWW_TOTP_SECRET in .env
   3. Raw token          → set GROWW_ACCESS_TOKEN in .env
+
+Scalability architecture (v2.1):
+  - Per-client subscription registry (no global symbol overwrite)
+  - Centralized market-data fanout: O(S) upstream calls instead of O(U×S)
+  - Option-chain request coalescing + TTL cache (1–3 s)
+  - Adaptive WebSocket refresh: fast (2 s) when active, slow (10 s) off-market
 """
 
 import os
@@ -19,8 +25,8 @@ import csv
 import io
 import threading
 import time as time_module
-from concurrent.futures import ThreadPoolExecutor, as_completed
-from typing import Any, Optional, List, Dict
+from concurrent.futures import ThreadPoolExecutor
+from typing import Any, Optional, List, Dict, Set
 from datetime import datetime, timedelta
 
 import httpx
@@ -43,7 +49,7 @@ _token_lock = threading.Lock()
 
 def _get_access_token(force_refresh: bool = False) -> str:
     """Generate or retrieve a cached Groww API access token.
-    
+
     When force_refresh=True, re-reads .env and re-authenticates regardless
     of any cached token.  This is triggered automatically when an API call
     fails with an auth/token error.
@@ -56,7 +62,6 @@ def _get_access_token(force_refresh: bool = False) -> str:
     if force_refresh:
         logger.info("Force-refreshing access token (re-reading .env) ...")
         _cached_access_token = None
-        # Re-read .env so the user can drop new keys without restarting
         load_dotenv(override=True)
 
     from growwapi import GrowwAPI
@@ -123,11 +128,7 @@ def _invalidate_groww_client():
 
 
 def get_groww_client(force_refresh: bool = False):
-    """Returns the globally initialized GrowwAPI client.
-    
-    If force_refresh=True, drops the cached client and re-authenticates
-    (re-reading .env for updated credentials).
-    """
+    """Returns the globally initialized GrowwAPI client."""
     global _cached_groww_client
     with _token_lock:
         if _cached_groww_client and not force_refresh:
@@ -160,7 +161,7 @@ except Exception as e:
 app = FastAPI(
     title="FnoPilot API",
     description="FnoPilot — Options Analytics Platform API for Groww Trade",
-    version="2.0.0",
+    version="2.1.0",
 )
 
 app.add_middleware(
@@ -185,9 +186,6 @@ _executor = ThreadPoolExecutor(max_workers=12)
 _feed_instance: Any = None
 _feed_cache: Dict[str, Any] = {"indices": {}, "ltp": {}, "ts": 0}
 _feed_started = False
-_active_ws: set = set()
-_tracked_option_symbols: List[str] = []  # "NSE_NIFTY25N1823400CE" format
-_tracked_options_lock = threading.Lock()
 
 # Cache previous-close prices so we can derive change/change_perc from the live feed value
 _index_prev_close: Dict[str, float] = {}  # display_name -> previous close
@@ -212,8 +210,6 @@ INDEX_TOKEN_DISPLAY = {
 }
 
 # ── Symbol Normalization ──
-# Map long / alternate names to the SHORT symbols expected by Groww option-chain API.
-# The API accepts BANKNIFTY (not "NIFTY BANK"), FINNIFTY (not "NIFTY FIN SERVICE"), etc.
 UNDERLYING_ALIAS_MAP = {
     "NIFTY BANK": "BANKNIFTY",
     "NIFTY FIN SERVICE": "FINNIFTY",
@@ -226,6 +222,336 @@ def normalize_underlying(symbol: str) -> str:
     """Normalize underlying symbol alias to the Groww API expected name."""
     key = symbol.upper().strip()
     return UNDERLYING_ALIAS_MAP.get(key, key)
+
+
+# ═══════════════════════════════════════════════════════════════════════════════
+# FIX 1 — Per-Client Subscription Registry
+# ═══════════════════════════════════════════════════════════════════════════════
+# Previously: a single global list that any client could overwrite.
+# Now: each WebSocket connection owns its own subscription set.
+#      A reverse index (symbol → set of ws connections) is maintained so the
+#      fanout service knows which clients want which symbols without iterating
+#      all connections on every tick.
+
+_client_subscriptions: Dict[int, Dict[str, Any]] = {}
+# id(ws) → {"ws": ws, "symbols": set(), "exchange": str}
+
+_symbol_to_clients: Dict[str, Set[int]] = {}
+# "NSE_NIFTY25N1823400CE" → {id(ws1), id(ws2), ...}
+
+_subscriptions_lock = asyncio.Lock()  # async lock — all mutations happen in async context
+
+
+async def _register_client(ws: WebSocket) -> int:
+    """Register a new WebSocket client and return its key."""
+    key = id(ws)
+    async with _subscriptions_lock:
+        _client_subscriptions[key] = {"ws": ws, "symbols": set(), "exchange": "NSE"}
+    return key
+
+
+async def _unregister_client(key: int) -> None:
+    """Remove a client from all registries."""
+    async with _subscriptions_lock:
+        entry = _client_subscriptions.pop(key, None)
+        if entry:
+            for sym in entry["symbols"]:
+                _symbol_to_clients.get(sym, set()).discard(key)
+                if sym in _symbol_to_clients and not _symbol_to_clients[sym]:
+                    del _symbol_to_clients[sym]
+
+
+async def _update_client_subscriptions(key: int, symbols: List[str], exchange: str) -> None:
+    """Atomically replace a client's option subscriptions and rebuild reverse index."""
+    prefixed = {f"{exchange}_{s}" for s in symbols}
+    async with _subscriptions_lock:
+        entry = _client_subscriptions.get(key)
+        if not entry:
+            return
+        old_symbols = entry["symbols"]
+
+        # Remove client from stale symbols
+        for sym in old_symbols - prefixed:
+            _symbol_to_clients.get(sym, set()).discard(key)
+            if sym in _symbol_to_clients and not _symbol_to_clients[sym]:
+                del _symbol_to_clients[sym]
+
+        # Add client to new symbols
+        for sym in prefixed - old_symbols:
+            if sym not in _symbol_to_clients:
+                _symbol_to_clients[sym] = set()
+            _symbol_to_clients[sym].add(key)
+
+        entry["symbols"] = prefixed
+        entry["exchange"] = exchange
+
+
+async def _clear_client_subscriptions(key: int) -> None:
+    """Remove all option subscriptions for a client."""
+    await _update_client_subscriptions(key, [], "NSE")
+
+
+def _get_all_unique_symbols() -> Set[str]:
+    """Return the union of all symbols subscribed to across all clients (lock-free snapshot)."""
+    result: Set[str] = set()
+    for entry in _client_subscriptions.values():
+        result |= entry["symbols"]
+    return result
+
+
+# ═══════════════════════════════════════════════════════════════════════════════
+# FIX 2 — Centralized Market-Data Fanout Service
+# ═══════════════════════════════════════════════════════════════════════════════
+# Previously: every sender() loop fetched LTPs independently, so N clients
+#             subscribed to the same symbols → N upstream calls per tick.
+# Now: one background task fetches LTPs for the union of all subscribed symbols
+#      once per tick and stores results in _ltp_fanout_cache.  Sender loops
+#      read from cache and push only to their subscriber.
+#
+# Upstream call complexity: O(S) per tick regardless of user count.
+
+_ltp_fanout_cache: Dict[str, float] = {}      # "NSE_SYMBOL" → ltp
+_ltp_fanout_ts: float = 0.0                    # epoch-seconds of last update
+_ltp_fanout_lock = asyncio.Lock()
+
+
+async def _fanout_ltp_loop() -> None:
+    """
+    Background asyncio task — runs forever.
+    Fetches LTPs for ALL currently-subscribed symbols in one batched call,
+    then updates _ltp_fanout_cache.  Runs every 2 s (market hours) or 10 s
+    (off-market) — see FIX 4 for adaptive rate.
+    """
+    global _ltp_fanout_cache, _ltp_fanout_ts
+    ltp_backoff: float = 0.0
+
+    while True:
+        interval = _adaptive_interval()
+        await asyncio.sleep(max(interval, ltp_backoff))
+        ltp_backoff = 0.0
+
+        symbols = _get_all_unique_symbols()
+        if not symbols:
+            continue
+
+        try:
+            groww = get_groww_client()
+            sym_list = list(symbols)
+            new_ltps: Dict[str, float] = {}
+
+            loop = asyncio.get_event_loop()
+            for i in range(0, len(sym_list), 50):
+                batch = tuple(sym_list[i:i + 50])
+                result = await loop.run_in_executor(
+                    _executor,
+                    lambda b=batch: groww.get_ltp(
+                        segment=groww.SEGMENT_FNO,
+                        exchange_trading_symbols=b if len(b) > 1 else b[0],
+                    )
+                )
+                if result:
+                    new_ltps.update(result)
+
+            async with _ltp_fanout_lock:
+                _ltp_fanout_cache = new_ltps
+                _ltp_fanout_ts = time_module.time()
+
+        except Exception as e:
+            err_msg = str(e).lower()
+            if "rate limit" in err_msg or "rate_limit" in err_msg or "too many" in err_msg:
+                ltp_backoff = 15.0
+                logger.warning(f"Fanout LTP rate-limited — backing off {ltp_backoff}s")
+            else:
+                logger.error(f"Fanout LTP poll error: {e}")
+
+
+# ═══════════════════════════════════════════════════════════════════════════════
+# FIX 3 — Option-Chain Cache + Request Coalescing
+# ═══════════════════════════════════════════════════════════════════════════════
+# Previously: each HTTP request triggered a fresh upstream call, so 50 clients
+#             polling the same chain at 10 s = 50 upstream calls/10 s.
+# Now: results are cached for TTL_OPTION_CHAIN seconds.  Concurrent requests
+#      for the same key are coalesced via asyncio.Event so only ONE upstream
+#      call is in-flight per unique key at any time.
+
+TTL_OPTION_CHAIN: float = 2.0   # seconds — tune to taste (1–3 s)
+
+_option_chain_cache: Dict[str, Dict[str, Any]] = {}
+# key → {"data": ..., "ts": float}
+
+_option_chain_inflight: Dict[str, asyncio.Event] = {}
+# key → Event that fires when the in-flight request completes
+
+_option_chain_lock = asyncio.Lock()
+
+
+def _option_chain_key(underlying: str, expiry_date: str, exchange: str) -> str:
+    return f"{underlying.upper()}|{expiry_date}|{exchange.upper()}"
+
+
+async def _fetch_option_chain_cached(
+    underlying: str,
+    expiry_date: str,
+    exchange: str,
+) -> Dict[str, Any]:
+    """
+    Return option chain data, using the in-memory TTL cache.
+    Concurrent requests for the same key wait for one shared upstream fetch
+    instead of each firing their own.
+    """
+    key = _option_chain_key(underlying, expiry_date, exchange)
+    now = time_module.time()
+
+    # Fast path — valid cache hit (no lock needed for read)
+    cached = _option_chain_cache.get(key)
+    if cached and (now - cached["ts"]) < TTL_OPTION_CHAIN:
+        return cached["data"]
+
+    async with _option_chain_lock:
+        # Re-check under lock (another coroutine may have populated it)
+        cached = _option_chain_cache.get(key)
+        if cached and (now - cached["ts"]) < TTL_OPTION_CHAIN:
+            return cached["data"]
+
+        # Coalesce: if a fetch is already in-flight for this key, wait for it
+        if key in _option_chain_inflight:
+            event = _option_chain_inflight[key]
+        else:
+            event = asyncio.Event()
+            _option_chain_inflight[key] = event
+            event = None  # this coroutine is the designated fetcher
+
+    if event is not None:
+        # Wait for the in-flight fetcher then return its result
+        await event.wait()
+        cached = _option_chain_cache.get(key)
+        if cached:
+            return cached["data"]
+        raise HTTPException(status_code=502, detail="Option chain upstream fetch failed")
+
+    # This coroutine is the designated fetcher
+    try:
+        data = await _do_fetch_option_chain(underlying, expiry_date, exchange)
+        async with _option_chain_lock:
+            _option_chain_cache[key] = {"data": data, "ts": time_module.time()}
+        return data
+    finally:
+        async with _option_chain_lock:
+            ev = _option_chain_inflight.pop(key, None)
+            if ev:
+                ev.set()
+
+
+async def _do_fetch_option_chain(
+    underlying: str,
+    expiry_date: str,
+    exchange: str,
+) -> Dict[str, Any]:
+    """Actual upstream fetch — called at most once per TTL window per cache key."""
+    groww = get_groww_client()
+    api_underlying = normalize_underlying(underlying)
+    exchange_const = groww.EXCHANGE_NSE if exchange.upper() == "NSE" else groww.EXCHANGE_BSE
+    loop = asyncio.get_event_loop()
+
+    try:
+        oc_response = await loop.run_in_executor(
+            _executor,
+            lambda: groww.get_option_chain(
+                exchange=exchange_const,
+                underlying=api_underlying,
+                expiry_date=expiry_date,
+            )
+        )
+    except Exception as api_err:
+        if _is_auth_error(api_err):
+            logger.warning("Auth error on option-chain, refreshing token and retrying...")
+            groww = get_groww_client(force_refresh=True)
+            exchange_const = groww.EXCHANGE_NSE if exchange.upper() == "NSE" else groww.EXCHANGE_BSE
+            oc_response = await loop.run_in_executor(
+                _executor,
+                lambda: groww.get_option_chain(
+                    exchange=exchange_const,
+                    underlying=api_underlying,
+                    expiry_date=expiry_date,
+                )
+            )
+        else:
+            raise
+
+    underlying_ltp = oc_response.get("underlying_ltp", 0)
+    raw_strikes: Dict[str, Any] = oc_response.get("strikes", {})
+
+    pcr = calculate_pcr(raw_strikes)
+    max_pain = calculate_max_pain(raw_strikes)
+    strike_prices = sorted([float(s) for s in raw_strikes.keys()])
+    atm_strike = find_atm_strike(underlying_ltp, strike_prices)
+
+    strikes_list = []
+    for strike_str in sorted(raw_strikes.keys(), key=lambda x: float(x)):
+        data = raw_strikes[strike_str]
+        strike_item: Dict[str, Any] = {"strike_price": float(strike_str), "CE": None, "PE": None}
+
+        for side in ("CE", "PE"):
+            if side in data:
+                leg = data[side]
+                greeks_data = leg.get("greeks", {})
+                strike_item[side] = {
+                    "trading_symbol": leg.get("trading_symbol", ""),
+                    "ltp": leg.get("ltp", 0),
+                    "bid": leg.get("bid_price", leg.get("bid", None)),
+                    "ask": leg.get("offer_price", leg.get("ask", leg.get("ask_price", None))),
+                    "change_perc": leg.get("day_change_perc", leg.get("change_perc", leg.get("change_percentage", None))),
+                    "oi_change": leg.get("oi_day_change", leg.get("oi_change", leg.get("open_interest_change", None))),
+                    "open_interest": leg.get("open_interest", 0),
+                    "volume": leg.get("volume", 0),
+                    "greeks": {
+                        "delta": greeks_data.get("delta", 0),
+                        "gamma": greeks_data.get("gamma", 0),
+                        "theta": greeks_data.get("theta", 0),
+                        "vega": greeks_data.get("vega", 0),
+                        "rho": greeks_data.get("rho", 0),
+                        "iv": greeks_data.get("iv", 0),
+                    },
+                }
+
+        strikes_list.append(strike_item)
+
+    return {
+        "underlying_ltp": underlying_ltp,
+        "strikes": strikes_list,
+        "expiry_date": expiry_date,
+        "pcr": pcr,
+        "max_pain": max_pain,
+        "atm_strike": atm_strike,
+        "total_strikes": len(strikes_list),
+        "lot_size": LOT_SIZES.get(underlying.upper().strip(), LOT_SIZES.get(api_underlying.upper().strip(), 1)),
+    }
+
+
+# ═══════════════════════════════════════════════════════════════════════════════
+# FIX 4 — Adaptive Refresh Rates
+# ═══════════════════════════════════════════════════════════════════════════════
+# Market hours: Mon–Fri 09:15–15:30 IST.
+# During market hours  → fast tick (2 s for WS push, 2 s for fanout).
+# Off market hours     → slow tick (10 s for WS push, 10 s for fanout).
+# This halves upstream API calls during pre/post-market and weekends.
+
+_IST_OFFSET = timedelta(hours=5, minutes=30)
+
+
+def _is_market_hours() -> bool:
+    """Return True if current IST time is within NSE market hours."""
+    now_ist = datetime.utcnow() + _IST_OFFSET
+    if now_ist.weekday() >= 5:          # Saturday / Sunday
+        return False
+    market_open  = now_ist.replace(hour=9,  minute=15, second=0, microsecond=0)
+    market_close = now_ist.replace(hour=15, minute=30, second=0, microsecond=0)
+    return market_open <= now_ist <= market_close
+
+
+def _adaptive_interval() -> float:
+    """Return push/fetch interval in seconds based on market hours."""
+    return 2.0 if _is_market_hours() else 10.0
 
 
 # ── Models ──
@@ -277,7 +603,6 @@ class OptionChainResponse(BaseModel):
 # ── Helper Functions ──
 
 def calculate_pcr(strikes_data: Dict[str, Any]) -> float:
-    """Calculate Put-Call Ratio from OI data."""
     total_put_oi = 0
     total_call_oi = 0
     for strike, data in strikes_data.items():
@@ -291,10 +616,6 @@ def calculate_pcr(strikes_data: Dict[str, Any]) -> float:
 
 
 def calculate_max_pain(strikes_data: Dict[str, Any]) -> float:
-    """
-    Calculate Max Pain — the strike price where option writers (sellers)
-    would have the least financial loss.
-    """
     strike_prices = sorted([float(s) for s in strikes_data.keys()])
     if not strike_prices:
         return 0.0
@@ -313,7 +634,6 @@ def calculate_max_pain(strikes_data: Dict[str, Any]) -> float:
                 pe_oi = data["PE"].get("open_interest", 0)
                 if test_strike < strike:
                     total_pain += (strike - test_strike) * pe_oi
-
         if total_pain < min_pain:
             min_pain = total_pain
             max_pain_strike = test_strike
@@ -322,27 +642,19 @@ def calculate_max_pain(strikes_data: Dict[str, Any]) -> float:
 
 
 def find_atm_strike(underlying_ltp: float, strike_prices: list) -> float:
-    """Find the ATM (At The Money) strike closest to the underlying LTP."""
     if not strike_prices:
         return 0
     return min(strike_prices, key=lambda s: abs(s - underlying_ltp))
 
 
 # ── Expiry Dates from CSV ──
-# Populated during CSV loading — maps "UNDERLYING_EXCHANGE" → sorted list of future expiry dates
 _csv_expiry_dates: Dict[str, List[str]] = {}
 
 
 def _get_expiry_dates_from_csv(underlying: str, exchange: str) -> List[str]:
-    """
-    Return valid expiry dates for an underlying, extracted from the Groww
-    instrument CSV during startup.  No API probing needed — instant response.
-    Only returns dates >= today.
-    """
     api_underlying = normalize_underlying(underlying)
     today_str = datetime.now().strftime("%Y-%m-%d")
 
-    # Try exact key first, then just the underlying (some underlyings appear on both exchanges)
     for key in (f"{api_underlying}_{exchange.upper()}", f"{underlying.upper()}_{exchange.upper()}"):
         dates = _csv_expiry_dates.get(key, [])
         if dates:
@@ -351,7 +663,6 @@ def _get_expiry_dates_from_csv(underlying: str, exchange: str) -> List[str]:
                 logger.info(f"CSV expiry dates for {key}: {len(future)} dates (nearest: {future[0]})")
                 return future
 
-    # Fallback: search all keys containing this underlying
     for key, dates in _csv_expiry_dates.items():
         if key.startswith(f"{api_underlying}_") or key.startswith(f"{underlying.upper()}_"):
             future = [d for d in dates if d >= today_str]
@@ -364,7 +675,6 @@ def _get_expiry_dates_from_csv(underlying: str, exchange: str) -> List[str]:
 
 
 # ── Index Configuration ──
-# Each index: (ltp_symbol, display_name, quote_exchange, quote_trading_symbol)
 INDEX_CONFIG = [
     ("NSE_NIFTY", "NIFTY 50", "NSE", "NIFTY"),
     ("BSE_SENSEX", "SENSEX", "BSE", "SENSEX"),
@@ -387,7 +697,6 @@ def _fetch_single_index(config_tuple: tuple, groww: Any) -> Optional[dict]:
         change_perc = quote.get("day_change_perc")
 
         if ltp:
-            # Cache previous close so the real-time feed can compute change
             ltp_f = float(ltp)
             if change is not None:
                 prev_close = ltp_f - float(change)
@@ -400,7 +709,6 @@ def _fetch_single_index(config_tuple: tuple, groww: Any) -> Optional[dict]:
                 "change_perc": float(change_perc) if change_perc is not None else None,
             }
     except Exception as e:
-        # If quote fails, try LTP as fallback
         try:
             ltp_response = groww.get_ltp(
                 segment=groww.SEGMENT_CASH,
@@ -415,8 +723,6 @@ def _fetch_single_index(config_tuple: tuple, groww: Any) -> Optional[dict]:
                     "change_perc": None,
                 }
         except Exception:
-            # Some indices (NIFTY NEXT 50, etc.) may not work via REST — they
-            # still work via GrowwFeed, so just log at debug level.
             logger.debug(f"Index REST fetch failed for {display_name} (will use feed): {e}")
     return None
 
@@ -424,13 +730,11 @@ def _fetch_single_index(config_tuple: tuple, groww: Any) -> Optional[dict]:
 # ── GrowwFeed Initialization ──
 
 def _init_groww_feed():
-    """Initialize GrowwFeed in synchronous mode for real-time index data."""
     global _feed_instance, _feed_started
     try:
         groww = get_groww_client()
         from growwapi import GrowwFeed
         _feed_instance = GrowwFeed(groww)
-        # Subscribe to index values (sync mode — no consume() needed)
         _feed_instance.subscribe_index_value(INDEX_FEED_TOKENS)
         _feed_started = True
         logger.info("GrowwFeed initialized — subscribed to index values")
@@ -454,12 +758,10 @@ def _feed_poll_loop():
 
 
 def _transform_index_feed_data() -> List[dict]:
-    """Transform raw feed index data into frontend-compatible format."""
     indices = []
     raw = _feed_cache.get("indices", {})
     if not raw:
         return indices
-    # GrowwFeed returns: {"NSE": {"CASH": {"NIFTY": {"tsInMillis": ..., "value": ...}}}}
     for exchange, segments in raw.items():
         if not isinstance(segments, dict):
             continue
@@ -490,8 +792,8 @@ def _transform_index_feed_data() -> List[dict]:
 
 @app.on_event("startup")
 async def startup_event():
-    """Initialize GrowwFeed, load instrument CSV, and start background polling."""
-    # ── Load instrument CSV (first attempt, synchronous) ──
+    """Initialize GrowwFeed, load instrument CSV, and start background tasks."""
+    # Load instrument CSV (synchronous, first attempt)
     _load_instruments_from_csv()
 
     def _startup_thread():
@@ -501,7 +803,10 @@ async def startup_event():
     thread = threading.Thread(target=_startup_thread, daemon=True)
     thread.start()
 
-    # ── Background CSV refresh task ──
+    # FIX 2: Start centralized LTP fanout task
+    asyncio.create_task(_fanout_ltp_loop())
+
+    # Background CSV refresh task
     async def _csv_refresh_loop():
         while True:
             await asyncio.sleep(_CSV_REFRESH_HOURS * 3600)
@@ -513,7 +818,7 @@ async def startup_event():
                 logger.error(f"Scheduled CSV refresh failed: {e}")
 
     asyncio.create_task(_csv_refresh_loop())
-    logger.info("FnoPilot API started — feed polling + CSV refresh launched")
+    logger.info("FnoPilot API v2.1 started — per-client subs, fanout LTP, chain cache, adaptive rate")
 
 
 # ── Real-Time Endpoints ──
@@ -528,8 +833,6 @@ async def live_indices():
         indices = _transform_index_feed_data()
         if indices:
             return {"indices": indices, "source": "feed"}
-
-    # Fallback to REST if feed not available
     return await get_index_prices()
 
 
@@ -551,7 +854,6 @@ async def batch_ltp(body: dict):
         segment_const = groww.SEGMENT_FNO if segment == "FNO" else groww.SEGMENT_CASH
         all_ltps = {}
 
-        # Batch in groups of 50 (API limit)
         for i in range(0, len(symbols), 50):
             batch = symbols[i:i + 50]
             exchange_symbols = tuple(f"{exchange}_{sym}" for sym in batch)
@@ -573,25 +875,31 @@ async def batch_ltp(body: dict):
 
 
 # ── WebSocket Feed ──
+# Uses FIX 1 (per-client registry) + FIX 2 (fanout cache reads) + FIX 4 (adaptive rate)
 
 @app.websocket("/ws/feed")
 async def websocket_feed(ws: WebSocket):
     """
     WebSocket endpoint for real-time data updates.
     Pushes index values and option LTPs to connected clients.
-    Accepts subscription messages: {"action": "subscribe_options", "symbols": [...], "exchange": "NSE"}
+
+    Subscription message:
+        {"action": "subscribe_options",   "symbols": [...], "exchange": "NSE"}
+        {"action": "unsubscribe_options"}
+        {"action": "ping"}  →  {"action": "pong"}
     """
     await ws.accept()
-    _active_ws.add(ws)
-    logger.info(f"WebSocket client connected. Total: {len(_active_ws)}")
+    client_key = await _register_client(ws)
+    logger.info(f"WebSocket client {client_key} connected. Total: {len(_client_subscriptions)}")
 
     async def sender():
-        """Push real-time updates to client every second."""
-        last_index_ts = 0
-        ltp_backoff = 0  # seconds of extra delay after rate-limit errors
+        """Push real-time updates from shared cache — no per-client upstream calls."""
+        last_index_ts: float = 0.0
+        last_ltp_ts: float = 0.0
+
         while True:
             try:
-                update = {}
+                update: Dict[str, Any] = {}
 
                 # 1. Index values from GrowwFeed cache
                 current_ts = _feed_cache.get("ts", 0)
@@ -601,37 +909,20 @@ async def websocket_feed(ws: WebSocket):
                         update["index_update"] = indices
                     last_index_ts = current_ts
 
-                # 2. Option LTPs — batch fetch from REST API (skip if in backoff)
-                with _tracked_options_lock:
-                    symbols = list(_tracked_option_symbols)
+                # 2. Option LTPs — read from shared fanout cache (FIX 2)
+                async with _subscriptions_lock:
+                    client_symbols = set(_client_subscriptions.get(client_key, {}).get("symbols", set()))
 
-                if symbols and ltp_backoff <= 0:
-                    try:
-                        groww = get_groww_client()
-                        all_ltps = {}
-                        for i in range(0, len(symbols), 50):
-                            batch = tuple(symbols[i:i + 50])
-                            loop = asyncio.get_event_loop()
-                            result = await loop.run_in_executor(
-                                _executor,
-                                lambda b=batch: groww.get_ltp(
-                                    segment=groww.SEGMENT_FNO,
-                                    exchange_trading_symbols=b if len(b) > 1 else b[0],
-                                )
-                            )
-                            if result:
-                                all_ltps.update(result)
-                        if all_ltps:
-                            update["ltp_update"] = all_ltps
-                    except Exception as e:
-                        err_msg = str(e).lower()
-                        if "rate limit" in err_msg or "rate_limit" in err_msg or "too many" in err_msg:
-                            ltp_backoff = 15  # back off 15 seconds on rate limit
-                            logger.warning(f"WS LTP rate-limited, backing off {ltp_backoff}s")
-                        else:
-                            logger.error(f"WS LTP poll error: {e}")
-                elif ltp_backoff > 0:
-                    ltp_backoff -= 2  # decrease by sleep interval
+                if client_symbols:
+                    async with _ltp_fanout_lock:
+                        fanout_ts = _ltp_fanout_ts
+                        cached_ltps = dict(_ltp_fanout_cache)
+
+                    if fanout_ts > last_ltp_ts:
+                        client_ltps = {sym: cached_ltps[sym] for sym in client_symbols if sym in cached_ltps}
+                        if client_ltps:
+                            update["ltp_update"] = client_ltps
+                        last_ltp_ts = fanout_ts
 
                 # 3. Push update
                 if update:
@@ -639,7 +930,9 @@ async def websocket_feed(ws: WebSocket):
 
             except Exception:
                 break
-            await asyncio.sleep(2)  # Push updates every 2 seconds
+
+            # FIX 4: Adaptive sleep — fast during market hours, slow otherwise
+            await asyncio.sleep(_adaptive_interval())
 
     async def receiver():
         """Handle subscription messages from client."""
@@ -651,21 +944,21 @@ async def websocket_feed(ws: WebSocket):
                 if action == "subscribe_options":
                     symbols = data.get("symbols", [])
                     exchange = data.get("exchange", "NSE")
-                    with _tracked_options_lock:
-                        _tracked_option_symbols.clear()
-                        for sym in symbols:
-                            _tracked_option_symbols.append(f"{exchange}_{sym}")
-                    logger.info(f"WS: Subscribed to {len(symbols)} FNO symbols")
+                    # FIX 1: Update only this client's subscriptions
+                    await _update_client_subscriptions(client_key, symbols, exchange)
+                    logger.info(f"WS {client_key}: subscribed to {len(symbols)} FNO symbols")
 
                 elif action == "unsubscribe_options":
-                    with _tracked_options_lock:
-                        _tracked_option_symbols.clear()
-                    logger.info("WS: Unsubscribed from FNO symbols")
+                    await _clear_client_subscriptions(client_key)
+                    logger.info(f"WS {client_key}: unsubscribed from FNO symbols")
+
+                elif action == "ping":
+                    await ws.send_json({"action": "pong"})
 
             except WebSocketDisconnect:
                 break
             except Exception as e:
-                logger.error(f"WS receive error: {e}")
+                logger.error(f"WS {client_key} receive error: {e}")
                 break
 
     try:
@@ -678,20 +971,27 @@ async def websocket_feed(ws: WebSocket):
     except Exception:
         pass
     finally:
-        _active_ws.discard(ws)
-        logger.info(f"WebSocket client disconnected. Total: {len(_active_ws)}")
+        await _unregister_client(client_key)
+        logger.info(f"WebSocket client {client_key} disconnected. Total: {len(_client_subscriptions)}")
 
 
 # ── Endpoints ──
 
 @app.get("/")
 async def root():
-    return {"status": "ok", "service": "FnoPilot API", "version": "2.0.0"}
+    return {"status": "ok", "service": "FnoPilot API", "version": "2.1.0"}
 
 
 @app.get("/api/health")
 async def health():
-    return {"status": "healthy", "timestamp": datetime.now().isoformat()}
+    return {
+        "status": "healthy",
+        "timestamp": datetime.now().isoformat(),
+        "active_ws_clients": len(_client_subscriptions),
+        "unique_subscribed_symbols": len(_get_all_unique_symbols()),
+        "market_hours": _is_market_hours(),
+        "tick_interval_s": _adaptive_interval(),
+    }
 
 
 @app.get("/api/index-prices")
@@ -701,7 +1001,6 @@ async def get_index_prices():
     Uses PARALLEL calls for all indices to avoid sequential blocking.
     If GrowwFeed is active, returns feed data for speed.
     """
-    # Try feed first for instant response
     if _feed_started and _feed_cache.get("ts", 0) > 0:
         indices = _transform_index_feed_data()
         if indices:
@@ -711,15 +1010,13 @@ async def get_index_prices():
         groww = get_groww_client()
         loop = asyncio.get_event_loop()
 
-        # Fetch all indices in parallel using thread pool
-        futures = []
-        for config in INDEX_CONFIG:
-            future = loop.run_in_executor(_executor, _fetch_single_index, config, groww)
-            futures.append(future)
-
+        futures = [
+            loop.run_in_executor(_executor, _fetch_single_index, config, groww)
+            for config in INDEX_CONFIG
+        ]
         results = await asyncio.gather(*futures, return_exceptions=True)
 
-        # Check if ALL results are auth errors → retry with fresh token
+        # If ALL results are auth errors → retry with fresh token
         auth_errors = [r for r in results if isinstance(r, Exception) and _is_auth_error(r)]
         if auth_errors and len(auth_errors) == len(results):
             logger.warning("All index fetches failed with auth error, refreshing token and retrying...")
@@ -751,121 +1048,12 @@ async def get_option_chain(
 ):
     """
     Fetch complete option chain from Groww API.
-    Returns strikes with CE/PE data including Greeks, OI, volume.
+    Results are cached for TTL_OPTION_CHAIN seconds and concurrent requests
+    for the same key are coalesced into a single upstream call (FIX 3).
     """
     try:
-        groww = get_groww_client()
-        api_underlying = normalize_underlying(underlying)
-
-        exchange_const = groww.EXCHANGE_NSE if exchange.upper() == "NSE" else groww.EXCHANGE_BSE
-
-        logger.info(f"Fetching option chain: {underlying} (api: {api_underlying}) @ {exchange} expiry={expiry_date}")
-
-        # Run blocking API call in thread pool (with auto-retry on auth errors)
-        loop = asyncio.get_event_loop()
-        try:
-            oc_response = await loop.run_in_executor(
-                _executor,
-                lambda: groww.get_option_chain(
-                    exchange=exchange_const,
-                    underlying=api_underlying,
-                    expiry_date=expiry_date,
-                )
-            )
-        except Exception as api_err:
-            if _is_auth_error(api_err):
-                logger.warning(f"Auth error on option-chain, refreshing token and retrying...")
-                groww = get_groww_client(force_refresh=True)
-                exchange_const = groww.EXCHANGE_NSE if exchange.upper() == "NSE" else groww.EXCHANGE_BSE
-                oc_response = await loop.run_in_executor(
-                    _executor,
-                    lambda: groww.get_option_chain(
-                        exchange=exchange_const,
-                        underlying=api_underlying,
-                        expiry_date=expiry_date,
-                    )
-                )
-            else:
-                raise
-
-        underlying_ltp = oc_response.get("underlying_ltp", 0)
-        raw_strikes: Dict[str, Any] = oc_response.get("strikes", {})
-
-        logger.info(f"Underlying LTP: {underlying_ltp}, Num strikes: {len(raw_strikes)}")
-
-        # Calculate analytics
-        pcr = calculate_pcr(raw_strikes)
-        max_pain = calculate_max_pain(raw_strikes)
-        strike_prices = sorted([float(s) for s in raw_strikes.keys()])
-        atm_strike = find_atm_strike(underlying_ltp, strike_prices)
-
-        # Build structured response
-        strikes_list = []
-        for strike_str in sorted(raw_strikes.keys(), key=lambda x: float(x)):
-            data = raw_strikes[strike_str]
-            strike_item: Dict[str, Any] = {
-                "strike_price": float(strike_str),
-                "CE": None,
-                "PE": None,
-            }
-
-            if "CE" in data:
-                ce = data["CE"]
-                greeks_data = ce.get("greeks", {})
-                strike_item["CE"] = {
-                    "trading_symbol": ce.get("trading_symbol", ""),
-                    "ltp": ce.get("ltp", 0),
-                    "bid": ce.get("bid_price", ce.get("bid", None)),
-                    "ask": ce.get("offer_price", ce.get("ask", ce.get("ask_price", None))),
-                    "change_perc": ce.get("day_change_perc", ce.get("change_perc", ce.get("change_percentage", None))),
-                    "oi_change": ce.get("oi_day_change", ce.get("oi_change", ce.get("open_interest_change", None))),
-                    "open_interest": ce.get("open_interest", 0),
-                    "volume": ce.get("volume", 0),
-                    "greeks": {
-                        "delta": greeks_data.get("delta", 0),
-                        "gamma": greeks_data.get("gamma", 0),
-                        "theta": greeks_data.get("theta", 0),
-                        "vega": greeks_data.get("vega", 0),
-                        "rho": greeks_data.get("rho", 0),
-                        "iv": greeks_data.get("iv", 0),
-                    },
-                }
-
-            if "PE" in data:
-                pe = data["PE"]
-                greeks_data = pe.get("greeks", {})
-                strike_item["PE"] = {
-                    "trading_symbol": pe.get("trading_symbol", ""),
-                    "ltp": pe.get("ltp", 0),
-                    "bid": pe.get("bid_price", pe.get("bid", None)),
-                    "ask": pe.get("offer_price", pe.get("ask", pe.get("ask_price", None))),
-                    "change_perc": pe.get("day_change_perc", pe.get("change_perc", pe.get("change_percentage", None))),
-                    "oi_change": pe.get("oi_day_change", pe.get("oi_change", pe.get("open_interest_change", None))),
-                    "open_interest": pe.get("open_interest", 0),
-                    "volume": pe.get("volume", 0),
-                    "greeks": {
-                        "delta": greeks_data.get("delta", 0),
-                        "gamma": greeks_data.get("gamma", 0),
-                        "theta": greeks_data.get("theta", 0),
-                        "vega": greeks_data.get("vega", 0),
-                        "rho": greeks_data.get("rho", 0),
-                        "iv": greeks_data.get("iv", 0),
-                    },
-                }
-
-            strikes_list.append(strike_item)
-
-        return {
-            "underlying_ltp": underlying_ltp,
-            "strikes": strikes_list,
-            "expiry_date": expiry_date,
-            "pcr": pcr,
-            "max_pain": max_pain,
-            "atm_strike": atm_strike,
-            "total_strikes": len(strikes_list),
-            "lot_size": LOT_SIZES.get(underlying.upper().strip(), LOT_SIZES.get(api_underlying.upper().strip(), 1)),
-        }
-
+        logger.info(f"Option chain request: {underlying} @ {exchange} expiry={expiry_date}")
+        return await _fetch_option_chain_cached(underlying, expiry_date, exchange)
     except HTTPException:
         raise
     except Exception as e:
@@ -1000,7 +1188,6 @@ async def refresh_token():
 
 
 # ── Lot Size & Instruments — Fallback Constants ──
-# These are used ONLY if the Groww CSV download fails on startup.
 _FALLBACK_LOT_SIZES: Dict[str, int] = {
     "NIFTY": 25, "NIFTY 50": 25, "BANKNIFTY": 15, "NIFTY BANK": 15,
     "FINNIFTY": 25, "NIFTY FIN SERVICE": 25, "MIDCPNIFTY": 50,
@@ -1065,7 +1252,6 @@ _FALLBACK_INSTRUMENTS: List[Dict] = [
 LOT_SIZES: Dict[str, int] = dict(_FALLBACK_LOT_SIZES)
 INSTRUMENTS: List[Dict] = list(_FALLBACK_INSTRUMENTS)
 
-# Known F&O index underlying symbols → human-readable display names
 _INDEX_DISPLAY_NAMES: Dict[str, str] = {
     "NIFTY": "Nifty 50",
     "BANKNIFTY": "Bank Nifty",
@@ -1078,12 +1264,6 @@ _INDEX_DISPLAY_NAMES: Dict[str, str] = {
 
 
 def _load_instruments_from_csv() -> None:
-    """
-    Download Groww's instrument CSV, parse it, and populate LOT_SIZES,
-    INSTRUMENTS, and _csv_expiry_dates.
-    Falls back to _FALLBACK_* constants on any failure.
-    Thread-safe: called from startup and periodic refresh.
-    """
     global LOT_SIZES, INSTRUMENTS, _csv_last_loaded, _csv_expiry_dates
 
     url = GROWW_INSTRUMENTS_CSV_URL
@@ -1103,11 +1283,10 @@ def _load_instruments_from_csv() -> None:
 
     reader = csv.DictReader(io.StringIO(csv_text))
 
-    # ── Pass 1: Collect FNO underlying → lot_size, expiry dates, and names from CASH EQ ──
-    fno_underlyings: Dict[str, int] = {}       # symbol → lot_size
-    fno_exchanges: Dict[str, str] = {}          # symbol → exchange (NSE/BSE)
-    cash_names: Dict[str, str] = {}             # trading_symbol → company name
-    expiry_dates_map: Dict[str, set] = {}       # "UNDERLYING_EXCHANGE" → set of expiry dates
+    fno_underlyings: Dict[str, int] = {}
+    fno_exchanges: Dict[str, str] = {}
+    cash_names: Dict[str, str] = {}
+    expiry_dates_map: Dict[str, set] = {}
     rows_processed = 0
 
     for row in reader:
@@ -1116,21 +1295,18 @@ def _load_instruments_from_csv() -> None:
         exchange = row.get("exchange", "").strip()
         instrument_type = row.get("instrument_type", "").strip()
 
-        # Collect company names from CASH EQ rows
         if segment == "CASH" and instrument_type == "EQ":
             ts = row.get("trading_symbol", "").strip()
             name = row.get("name", "").strip()
             if ts and name:
                 cash_names[ts] = name
 
-        # Collect FNO underlyings with lot sizes AND expiry dates
         if segment == "FNO":
             underlying = row.get("underlying_symbol", "").strip()
             lot_str = row.get("lot_size", "").strip()
             expiry_date = row.get("expiry_date", "").strip()
             if not underlying or not lot_str:
                 continue
-            # Skip test/internal symbols
             if "NSETEST" in underlying or "BSETEST" in underlying:
                 continue
             try:
@@ -1140,8 +1316,6 @@ def _load_instruments_from_csv() -> None:
             if lot > 0 and underlying not in fno_underlyings:
                 fno_underlyings[underlying] = lot
                 fno_exchanges[underlying] = exchange
-
-            # Collect expiry dates for this underlying
             if expiry_date and lot > 0:
                 key = f"{underlying}_{exchange}"
                 if key not in expiry_dates_map:
@@ -1152,7 +1326,6 @@ def _load_instruments_from_csv() -> None:
         logger.warning("CSV parsed but no FNO instruments found — keeping existing data")
         return
 
-    # ── Build expiry dates (sorted, deduplicated) ──
     new_expiry_dates: Dict[str, List[str]] = {}
     total_expiry_count = 0
     for key, dates in expiry_dates_map.items():
@@ -1160,7 +1333,6 @@ def _load_instruments_from_csv() -> None:
         new_expiry_dates[key] = sorted_dates
         total_expiry_count += len(sorted_dates)
 
-    # Also add alias-based keys so lookups by canonical name work
     for alias, canonical in UNDERLYING_ALIAS_MAP.items():
         for exchange_suffix in ("_NSE", "_BSE"):
             alias_key = f"{alias}{exchange_suffix}"
@@ -1170,25 +1342,19 @@ def _load_instruments_from_csv() -> None:
             elif canonical_key in new_expiry_dates and alias_key not in new_expiry_dates:
                 new_expiry_dates[alias_key] = new_expiry_dates[canonical_key]
 
-    # ── Build LOT_SIZES with alias support ──
     new_lot_sizes: Dict[str, int] = {}
     for sym, lot in fno_underlyings.items():
         new_lot_sizes[sym] = lot
-        # Add Groww API alias forms (UNDERLYING_ALIAS_MAP is alias → canonical)
-        # We need reverse: canonical → alias  AND  alias → canonical
         for alias, canonical in UNDERLYING_ALIAS_MAP.items():
             if sym == alias:
                 new_lot_sizes[canonical] = lot
             elif sym == canonical:
                 new_lot_sizes[alias] = lot
 
-    # ── Build INSTRUMENTS list ──
-    # Index underlyings (FNO underlyings that are known indices)
     index_syms = set(_INDEX_DISPLAY_NAMES.keys())
     new_instruments: List[Dict] = []
     seen_symbols: set = set()
 
-    # Indices first
     for sym in sorted(fno_underlyings.keys()):
         if sym in index_syms:
             new_instruments.append({
@@ -1199,11 +1365,10 @@ def _load_instruments_from_csv() -> None:
             })
             seen_symbols.add(sym)
 
-    # Stocks (everything else)
     for sym in sorted(fno_underlyings.keys()):
         if sym in seen_symbols:
             continue
-        name = cash_names.get(sym, sym)  # Use company name from CASH EQ, or symbol
+        name = cash_names.get(sym, sym)
         new_instruments.append({
             "symbol": sym,
             "name": name,
@@ -1212,7 +1377,7 @@ def _load_instruments_from_csv() -> None:
         })
         seen_symbols.add(sym)
 
-    # ── Atomically swap ──
+    # Atomic swap
     LOT_SIZES = new_lot_sizes
     INSTRUMENTS = new_instruments
     _csv_expiry_dates = new_expiry_dates
@@ -1230,15 +1395,11 @@ def _load_instruments_from_csv() -> None:
 
 @app.get("/api/lot-sizes")
 async def get_lot_sizes():
-    """Return lot sizes for all configured underlyings."""
     return {"lot_sizes": LOT_SIZES}
 
 
 @app.get("/api/lot-size")
-async def get_lot_size(
-    underlying: str = Query(..., description="Underlying symbol"),
-):
-    """Return lot size for a specific underlying."""
+async def get_lot_size(underlying: str = Query(..., description="Underlying symbol")):
     key = underlying.upper().strip()
     api_key = normalize_underlying(underlying).upper().strip()
     lot_size = LOT_SIZES.get(key, LOT_SIZES.get(api_key, 1))
@@ -1247,15 +1408,11 @@ async def get_lot_size(
 
 @app.get("/api/instruments")
 async def get_instruments():
-    """Return the full list of F&O instruments loaded from the Groww CSV."""
     return {"instruments": INSTRUMENTS, "count": len(INSTRUMENTS)}
 
 
 @app.get("/api/instruments/search")
-async def search_instruments(
-    q: str = Query(..., min_length=1, description="Search query"),
-):
-    """Search for instruments — instant local lookup from CSV-loaded data."""
+async def search_instruments(q: str = Query(..., min_length=1, description="Search query")):
     query = q.upper()
     results = [
         inst for inst in INSTRUMENTS
